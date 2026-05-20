@@ -15,16 +15,18 @@ The LLM must never generate synthetic patients directly.
 
 ## MVP Scope
 
-Initial diseases:
+Initial MCRD-backed diseases:
 
-- Niemann-Pick type C
-- Usher syndrome type I
-- Rett syndrome
-- Marfan syndrome
-- Duchenne muscular dystrophy
-- Phenylketonuria
-- Cystic fibrosis
-- Tuberous sclerosis complex
+| Disease | Gene |
+| --- | --- |
+| Niemann-Pick disease type C1 | NPC1 |
+| Rett syndrome / atypical Rett syndrome | MECP2 |
+| Duchenne muscular dystrophy | DMD |
+| Cystic fibrosis | CFTR |
+| Neuronal ceroid lipofuscinosis 6 | CLN6 |
+| Pompe disease / glycogen storage disease II | GAA |
+| Hypophosphatasia | ALPL |
+| Noonan syndrome | PTPN11 |
 
 Initial sources:
 

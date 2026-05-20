@@ -5,14 +5,22 @@
 
 mvp:
   diseases:
-    - Niemann-Pick type C
-    - Usher syndrome type I
-    - Rett syndrome
-    - Marfan syndrome
-    - Duchenne muscular dystrophy
-    - Phenylketonuria
-    - Cystic fibrosis
-    - Tuberous sclerosis complex
+    - disease: Niemann-Pick disease type C1
+      gene: NPC1
+    - disease: Rett syndrome / atypical Rett syndrome
+      gene: MECP2
+    - disease: Duchenne muscular dystrophy
+      gene: DMD
+    - disease: Cystic fibrosis
+      gene: CFTR
+    - disease: Neuronal ceroid lipofuscinosis 6
+      gene: CLN6
+    - disease: Pompe disease / glycogen storage disease II
+      gene: GAA
+    - disease: Hypophosphatasia
+      gene: ALPL
+    - disease: Noonan syndrome
+      gene: PTPN11
 
 simulation:
   difficulties:

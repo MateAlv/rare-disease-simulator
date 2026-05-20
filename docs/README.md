@@ -52,23 +52,25 @@ synthetic cases
 
 ## MVP Diseases
 
-The MVP will start with 8 varied, well-documented diseases. The selection is meant to stress different clinical patterns, not simply maximize rarity.
+The MVP will start with 8 varied, well-documented diseases whose target genes are present in the local GraPhens MCRD dataset. The selection is meant to stress different clinical patterns while keeping the first validation loop compatible with MCRD.
 
-| Disease | Why it is useful for the MVP |
-| --- | --- |
-| Niemann-Pick type C | Neurovisceral, progressive, variable onset, strong clinical descriptions. |
-| Usher syndrome type I | Sensory disease: deafness, vestibular dysfunction, retinitis pigmentosa. |
-| Rett syndrome | Neurodevelopmental, sex bias, staged/evolving presentation. |
-| Marfan syndrome | Connective tissue, cardiovascular, skeletal, and ocular phenotype. |
-| Duchenne muscular dystrophy | Neuromuscular, X-linked, clear pediatric progression. |
-| Phenylketonuria | Metabolic, treatable, phenotype depends on early intervention. |
-| Cystic fibrosis | Multisystem respiratory/digestive disease with strong documentation. |
-| Tuberous sclerosis complex | Neurocutaneous, multiorgan, multiple genes, variable phenotype. |
+| Disease | Gene | Why it is useful for the MVP |
+| --- | --- | --- |
+| Niemann-Pick disease type C1 | NPC1 | Neurovisceral, progressive, variable onset, strong clinical descriptions. |
+| Rett syndrome / atypical Rett syndrome | MECP2 | Neurodevelopmental, sex-related effects, staged/evolving presentation. |
+| Duchenne muscular dystrophy | DMD | Neuromuscular, X-linked, clear pediatric progression. |
+| Cystic fibrosis | CFTR | Multisystem respiratory/digestive disease with strong documentation. |
+| Neuronal ceroid lipofuscinosis 6 | CLN6 | Progressive neurodegenerative lysosomal/storage phenotype. |
+| Pompe disease / glycogen storage disease II | GAA | Treatable metabolic-neuromuscular disease with onset and severity variation. |
+| Hypophosphatasia | ALPL | Skeletal/metabolic disease with onset variation. |
+| Noonan syndrome | PTPN11 | Developmental, craniofacial, cardiac, and growth phenotype. |
 
 Additional candidates for expansion:
 
-- Achondroplasia
-- Wilson disease
+- Ataxia-telangiectasia / `ATM`
+- PTEN hamartoma tumor syndrome / `PTEN`
+- Fibrodysplasia ossificans progressiva / `ACVR1`
+- Mucopolysaccharidosis type VI / `ARSB`
 
 ## Source Policy
 
