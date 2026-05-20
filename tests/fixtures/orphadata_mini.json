@@ -1,0 +1,42 @@
+{
+  "source": {
+    "name": "orphanet_fixture",
+    "version": "fixture-0.1",
+    "retrieved_at": "2026-05-20"
+  },
+  "diseases": [
+    {
+      "orpha_id": "ORPHA:646",
+      "name": "Niemann-Pick disease type C",
+      "mapped_ids": {
+        "omim": ["OMIM:257220"],
+        "mondo": []
+      },
+      "genes": [
+        {
+          "symbol": "NPC1",
+          "association_type": "causal",
+          "inheritance": ["autosomal recessive"]
+        }
+      ],
+      "phenotypes": [
+        {
+          "hpo_id": "HP:0001251",
+          "label": "Ataxia",
+          "frequency": "frequent"
+        },
+        {
+          "hpo_id": "HP:0001433",
+          "label": "Hepatosplenomegaly",
+          "frequency": "occasional"
+        },
+        {
+          "hpo_id": "HP:0000511",
+          "label": "Vertical supranuclear gaze palsy",
+          "frequency": "frequent"
+        }
+      ]
+    }
+  ]
+}
+

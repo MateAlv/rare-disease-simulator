@@ -1,0 +1,35 @@
+{
+  "disease_id": "ORPHA:646",
+  "disease_name": "Niemann-Pick disease type C1",
+  "mapped_ids": {
+    "orpha": "ORPHA:646",
+    "omim": ["OMIM:257220"],
+    "mondo": []
+  },
+  "genes": [
+    {
+      "symbol": "NPC1",
+      "association_type": "causal",
+      "inheritance": ["autosomal recessive"]
+    }
+  ],
+  "phenotypes": [
+    {
+      "hpo_id": "HP:0001251",
+      "label": "Ataxia",
+      "frequency": "frequent",
+      "source": ["orphanet_fixture", "synthetic_fixture_text"]
+    },
+    {
+      "hpo_id": "HP:0000511",
+      "label": "Vertical supranuclear gaze palsy",
+      "frequency": "frequent",
+      "source": ["orphanet_fixture", "synthetic_fixture_text"]
+    }
+  ],
+  "quality": {
+    "fixture": true,
+    "warnings": []
+  }
+}
+
