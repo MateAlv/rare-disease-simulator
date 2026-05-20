@@ -1,0 +1,27 @@
+# MVP configuration placeholder.
+#
+# This file will hold source locations, selected diseases, LLM extraction
+# settings, profile merge thresholds, simulator parameters, and export paths.
+
+mvp:
+  diseases:
+    - Niemann-Pick type C
+    - Usher syndrome type I
+    - Rett syndrome
+    - Marfan syndrome
+    - Duchenne muscular dystrophy
+    - Phenylketonuria
+    - Cystic fibrosis
+    - Tuberous sclerosis complex
+
+simulation:
+  difficulties:
+    - easy
+    - medium
+    - hard
+  cases_per_disease_per_difficulty: 100
+  seed: 42
+
+exports:
+  rich_cases_path: outputs/rich_cases.jsonl
+  graphens_path: outputs/graphens.json

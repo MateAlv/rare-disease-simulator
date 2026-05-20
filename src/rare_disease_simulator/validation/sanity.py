@@ -1,0 +1,1 @@
+"""Synthetic case sanity checks."""

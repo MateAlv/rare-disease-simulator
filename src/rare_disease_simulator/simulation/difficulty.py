@@ -1,0 +1,1 @@
+"""Difficulty-specific simulation presets."""

@@ -1,0 +1,1 @@
+"""Disease profile schema definitions."""

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# Generated biomedical data and simulator outputs
+data/raw/*
+data/cache/*
+data/profiles/*
+outputs/*
+
+# Keep directory placeholders
+!data/raw/.gitkeep
+!data/cache/.gitkeep
+!data/profiles/.gitkeep
+!outputs/.gitkeep

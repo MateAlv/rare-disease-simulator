@@ -1,0 +1,1 @@
+"""MONDO source loader placeholder."""
