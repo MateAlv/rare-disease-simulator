@@ -411,6 +411,10 @@ rare-disease-simulator export-graphens --cases outputs/rich_cases.jsonl
 rare-disease-simulator validate
 ```
 
+## Implementation Plan
+
+The staged implementation plan lives in [plan/implementation_plan.md](plan/implementation_plan.md).
+
 ## Proposed Package Layout
 
 ```text
@@ -419,6 +423,8 @@ rare-disease-simulator/
     mvp.yaml
   docs/
     design.md
+    plan/
+      implementation_plan.md
     schemas.md
     sources.md
   src/rare_disease_simulator/
