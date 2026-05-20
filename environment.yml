@@ -1,0 +1,10 @@
+name: rare-disease-simulator
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pydantic>=2,<3
+  - pyyaml>=6,<7
+  - typer>=0.12,<1
+  - pytest>=8,<9
+  - ruff>=0.6,<1

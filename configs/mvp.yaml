@@ -22,6 +22,19 @@ mvp:
     - disease: Noonan syndrome
       gene: PTPN11
 
+sources:
+  hpo_dir: data/raw/hpo
+  orphadata_dir: data/raw/orphadata
+  mondo_path: data/raw/mondo/mondo.json
+
+llm:
+  provider: dummy
+  model: dummy
+  prompt_version: mvp-v0
+  extraction_schema_version: mvp-v0
+  cache_dir: data/cache/llm_extraction
+  temperature: 0.0
+
 simulation:
   difficulties:
     - easy
@@ -31,5 +44,8 @@ simulation:
   seed: 42
 
 exports:
+  profiles_path: outputs/profiles.jsonl
+  profile_patches_path: outputs/profile_patches.jsonl
   rich_cases_path: outputs/rich_cases.jsonl
   graphens_path: outputs/graphens.json
+  review_dir: outputs/review
