@@ -1,0 +1,100 @@
+{
+  "disease_id": "ORPHA:646",
+  "disease_name": "Niemann-Pick disease type C1",
+  "mapped_ids": {
+    "orpha": "ORPHA:646",
+    "omim": ["OMIM:257220"],
+    "mondo": []
+  },
+  "genes": [
+    {
+      "symbol": "NPC1",
+      "association_type": "causal",
+      "inheritance": ["autosomal recessive"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "genes",
+          "confidence": 1.0
+        }
+      ]
+    }
+  ],
+  "phenotypes": [
+    {
+      "hpo_id": "HP:0001251",
+      "label": "Ataxia",
+      "frequency": "frequent",
+      "source": ["orphanet_fixture"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "phenotypes",
+          "confidence": 1.0
+        }
+      ]
+    },
+    {
+      "hpo_id": "HP:0001433",
+      "label": "Hepatosplenomegaly",
+      "frequency": "occasional",
+      "source": ["orphanet_fixture"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "phenotypes",
+          "confidence": 1.0
+        }
+      ]
+    },
+    {
+      "hpo_id": "HP:0000511",
+      "label": "Vertical supranuclear gaze palsy",
+      "frequency": "frequent",
+      "source": ["orphanet_fixture"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "phenotypes",
+          "confidence": 1.0
+        }
+      ]
+    }
+  ],
+  "provenance": [
+    {
+      "source": {
+        "name": "orphanet_fixture",
+        "retrieved_at": "2026-05-20",
+        "version": "fixture-0.1",
+        "redistribution_allowed": true
+      },
+      "field": "profile",
+      "confidence": 1.0
+    }
+  ],
+  "quality": {
+    "fixture": true,
+    "warnings": []
+  }
+}

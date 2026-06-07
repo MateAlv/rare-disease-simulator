@@ -11,6 +11,10 @@ from pydantic import ValidationError
 
 from rare_disease_simulator import __version__
 from rare_disease_simulator.config import DEFAULT_CONFIG_PATH, AppConfig, load_config
+from rare_disease_simulator.profiles.builder import (
+    build_profiles_from_fixtures,
+    write_profiles_jsonl,
+)
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -101,12 +105,47 @@ def extract_profile_patches(ctx: typer.Context) -> None:
 
 
 @app.command("build-profiles")
-def build_profiles(ctx: typer.Context) -> None:
+def build_profiles(
+    ctx: typer.Context,
+    fixture_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--fixture-dir",
+            help="Run profile building from a local fixture directory.",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=False,
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Override the configured profiles JSONL output path.",
+            dir_okay=False,
+            resolve_path=False,
+        ),
+    ] = None,
+) -> None:
     """Build validated DiseaseProfile artifacts."""
 
     config = _config_from_context(ctx)
-    typer.echo(f"Configured MVP diseases: {len(config.mvp.diseases)}")
-    typer.echo(f"Profiles output: {config.exports.profiles_path}")
+    if fixture_dir is None:
+        typer.echo(f"Configured MVP diseases: {len(config.mvp.diseases)}")
+        typer.echo(f"Profiles output: {config.exports.profiles_path}")
+        typer.echo("No profile source selected. Use --fixture-dir to run the fixture path.")
+        return
+
+    result = build_profiles_from_fixtures(fixture_dir)
+    output_path = output or config.exports.profiles_path
+    written_count = write_profiles_jsonl(output_path, result.profiles)
+
+    typer.echo(f"Patch validation: {result.patch_validation.status}")
+    typer.echo(f"Wrote {written_count} profile(s) to {output_path}")
+    if result.warnings:
+        typer.echo(f"Quality warnings: {', '.join(result.warnings)}")
 
 
 @app.command("simulate")

@@ -66,6 +66,12 @@ class ExportPathsConfig(BaseModel):
     review_dir: Path = Path("outputs/review")
 
 
+class FixtureConfig(BaseModel):
+    """Local runnable fixture locations."""
+
+    fixture_dir: Path = Path("data/fixtures")
+
+
 class AppConfig(BaseModel):
     """Top-level application configuration."""
 
@@ -76,6 +82,7 @@ class AppConfig(BaseModel):
     llm: LlmConfig = Field(default_factory=LlmConfig)
     simulation: SimulationSettings = Field(default_factory=SimulationSettings)
     exports: ExportPathsConfig = Field(default_factory=ExportPathsConfig)
+    fixtures: FixtureConfig = Field(default_factory=FixtureConfig)
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> AppConfig:
