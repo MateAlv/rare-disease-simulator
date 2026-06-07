@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from rare_disease_simulator.exports.jsonl import read_model_jsonl
 from rare_disease_simulator.llm_extraction.schema import DiseaseProfilePatch, TextSnippet
+from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.schema import SyntheticCase
 
 FIXTURE_DIR = Path(__file__).parent
 
@@ -37,12 +40,7 @@ def read_text_snippets(path: Path | None = None) -> list[TextSnippet]:
     """Read trusted text snippet JSONL fixtures."""
 
     snippets_path = path or fixture_path("text_snippets.jsonl")
-    snippets: list[TextSnippet] = []
-    with snippets_path.open("r", encoding="utf-8") as file:
-        for line in file:
-            if line.strip():
-                snippets.append(TextSnippet.model_validate_json(line))
-    return snippets
+    return read_model_jsonl(snippets_path, TextSnippet)
 
 
 def read_profile_patch(path: Path | None = None) -> DiseaseProfilePatch:
@@ -52,9 +50,15 @@ def read_profile_patch(path: Path | None = None) -> DiseaseProfilePatch:
     return DiseaseProfilePatch.model_validate_json(patch_path.read_text(encoding="utf-8"))
 
 
-def read_disease_profile(path: Path | None = None) -> dict[str, Any]:
+def read_disease_profile(path: Path | None = None) -> DiseaseProfile:
     """Read the expected merged disease profile fixture."""
 
     profile_path = path or fixture_path("disease_profile.json")
-    return json.loads(profile_path.read_text(encoding="utf-8"))
+    return DiseaseProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
 
+
+def read_synthetic_case(path: Path | None = None) -> SyntheticCase:
+    """Read an example synthetic case fixture."""
+
+    case_path = path or fixture_path("synthetic_case.json")
+    return SyntheticCase.model_validate_json(case_path.read_text(encoding="utf-8"))

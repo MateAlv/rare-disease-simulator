@@ -10,7 +10,19 @@
     {
       "symbol": "NPC1",
       "association_type": "causal",
-      "inheritance": ["autosomal recessive"]
+      "inheritance": ["autosomal recessive"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "genes",
+          "confidence": 1.0
+        }
+      ]
     }
   ],
   "phenotypes": [
@@ -18,18 +30,93 @@
       "hpo_id": "HP:0001251",
       "label": "Ataxia",
       "frequency": "frequent",
-      "source": ["orphanet_fixture", "synthetic_fixture_text"]
+      "source": ["orphanet_fixture", "synthetic_fixture_text"],
+      "provenance": [
+        {
+          "source": {
+            "name": "orphanet_fixture",
+            "retrieved_at": "2026-05-20",
+            "version": "fixture-0.1",
+            "redistribution_allowed": true
+          },
+          "field": "phenotypes",
+          "confidence": 1.0
+        }
+      ]
     },
     {
       "hpo_id": "HP:0000511",
       "label": "Vertical supranuclear gaze palsy",
       "frequency": "frequent",
-      "source": ["orphanet_fixture", "synthetic_fixture_text"]
+      "source": ["orphanet_fixture", "synthetic_fixture_text"],
+      "provenance": [
+        {
+          "source": {
+            "name": "synthetic_fixture_text",
+            "retrieved_at": "2026-05-20",
+            "section": "clinical summary",
+            "license": "test fixture",
+            "redistribution_allowed": true
+          },
+          "field": "phenotypes",
+          "evidence": "Affected individuals may present with progressive neurologic deterioration, ataxia, vertical supranuclear gaze palsy, dysphagia, seizures, and hepatosplenomegaly.",
+          "confidence": 0.91
+        }
+      ]
+    }
+  ],
+  "negative_phenotypes": [],
+  "age_of_onset": {
+    "category": "childhood_or_adolescent",
+    "confidence": 0.84,
+    "provenance": [
+      {
+        "source": {
+          "name": "synthetic_fixture_text",
+          "retrieved_at": "2026-05-20",
+          "section": "clinical summary",
+          "license": "test fixture",
+          "redistribution_allowed": true
+        },
+        "field": "age_of_onset",
+        "evidence": "Onset is variable and often occurs in childhood or adolescence.",
+        "confidence": 0.84
+      }
+    ]
+  },
+  "progression": "progressive",
+  "clinical_summary": {
+    "text": "Autosomal recessive neurovisceral disorder with progressive neurologic features and variable onset.",
+    "llm_generated": false,
+    "provenance": [
+      {
+        "source": {
+          "name": "synthetic_fixture_text",
+          "retrieved_at": "2026-05-20",
+          "section": "clinical summary",
+          "license": "test fixture",
+          "redistribution_allowed": true
+        },
+        "field": "clinical_summary",
+        "confidence": 0.9
+      }
+    ]
+  },
+  "provenance": [
+    {
+      "source": {
+        "name": "orphanet_fixture",
+        "retrieved_at": "2026-05-20",
+        "version": "fixture-0.1",
+        "redistribution_allowed": true
+      },
+      "field": "profile",
+      "confidence": 1.0
     }
   ],
   "quality": {
     "fixture": true,
+    "profile_confidence": 0.9,
     "warnings": []
   }
 }
-

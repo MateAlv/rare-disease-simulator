@@ -1,0 +1,93 @@
+{
+  "case_id": "synthetic-ORPHA_646-000001",
+  "target": {
+    "disease_id": "ORPHA:646",
+    "disease_name": "Niemann-Pick disease type C1",
+    "gene": "NPC1",
+    "gene_label": 101,
+    "disease_label": 646
+  },
+  "patient": {
+    "sex": "female",
+    "age": {
+      "value": 9,
+      "unit": "years"
+    },
+    "age_of_onset": {
+      "value": 5,
+      "unit": "years"
+    },
+    "onset_category": "childhood",
+    "region": "unknown"
+  },
+  "positive_phenotypes": [
+    {
+      "hpo_id": "HP:0001251",
+      "label": "Ataxia",
+      "status": "positive",
+      "observed": true,
+      "source_probability": 0.7,
+      "simulated_origin": "disease_profile"
+    },
+    {
+      "hpo_id": "HP:0000511",
+      "label": "Vertical supranuclear gaze palsy",
+      "status": "positive",
+      "observed": true,
+      "source_probability": 0.7,
+      "simulated_origin": "disease_profile"
+    }
+  ],
+  "negative_phenotypes": [
+    {
+      "hpo_id": "HP:0001433",
+      "label": "Hepatosplenomegaly",
+      "status": "negative",
+      "observed": true,
+      "source_probability": 0.2,
+      "simulated_origin": "asked_negative",
+      "reason": "explicitly_absent_in_simulated_visit"
+    }
+  ],
+  "missing_phenotypes": [
+    {
+      "hpo_id": "HP:0001250",
+      "label": "Seizure",
+      "status": "missing",
+      "observed": false,
+      "source_probability": 0.3,
+      "simulated_origin": "disease_profile",
+      "reason": "not_recorded"
+    }
+  ],
+  "unknown_phenotypes": [
+    {
+      "hpo_id": "HP:0002015",
+      "label": "Dysphagia",
+      "status": "unknown",
+      "observed": null,
+      "source_probability": 0.3,
+      "simulated_origin": "disease_profile",
+      "reason": "not_enough_information"
+    }
+  ],
+  "noise_phenotypes": [],
+  "metadata": {
+    "generator_version": "0.1.0",
+    "profile_version": "fixture-0.1",
+    "source_versions": {
+      "hpo": "fixture-0.1",
+      "orphanet": "fixture-0.1"
+    },
+    "prompt_versions": {
+      "llm_extraction": "mvp-v0"
+    },
+    "llm_provider": "dummy",
+    "llm_model": "dummy",
+    "simulator_version": "0.1.0",
+    "config_hash": "fixture-config-hash",
+    "seed": 42,
+    "difficulty": "easy",
+    "generated_at": "2026-05-20T12:00:00"
+  }
+}

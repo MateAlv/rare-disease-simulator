@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rare_disease_simulator.profiles.schema import OnsetCategory, SourceReference
+
 Confidence = float
 HpoStatus = Literal["present", "absent", "uncertain"]
-
-
-class SourceReference(BaseModel):
-    """Reference to the source text used for extraction."""
-
-    name: str
-    url: str | None = None
-    retrieved_at: date | None = None
-    section: str | None = None
-    license: str | None = None
-    redistribution_allowed: bool = False
 
 
 class TextSnippet(BaseModel):
@@ -46,7 +36,7 @@ class PhenotypeExtraction(BaseModel):
     status: HpoStatus
     frequency: str = "unknown"
     diagnostic_role: str = "unknown"
-    onset: str = "unknown"
+    onset: OnsetCategory = "unknown"
     evidence_span: str
     confidence: Confidence = Field(ge=0.0, le=1.0)
 
