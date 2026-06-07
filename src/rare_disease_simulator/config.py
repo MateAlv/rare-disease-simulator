@@ -27,6 +27,12 @@ class SourcePathsConfig(BaseModel):
     """Local source file locations."""
 
     hpo_dir: Path = Path("data/raw/hpo")
+    hpo_terms_path: Path = Path("data/raw/hpo/hpo_terms.tsv")
+    phenotype_annotation_path: Path = Path("data/raw/hpo/phenotype.hpoa")
+    genes_to_phenotype_path: Path = Path("data/raw/hpo/genes_to_phenotype.txt")
+    negative_phenotype_annotation_path: Path = Path(
+        "data/raw/hpo/negative_phenotype_annotation.tab"
+    )
     orphadata_dir: Path = Path("data/raw/orphadata")
     mondo_path: Path = Path("data/raw/mondo/mondo.json")
 
@@ -79,4 +85,3 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> AppConfig:
     with config_path.open("r", encoding="utf-8") as file:
         data = yaml.safe_load(file) or {}
     return AppConfig.model_validate(data)
-

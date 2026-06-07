@@ -24,6 +24,10 @@ mvp:
 
 sources:
   hpo_dir: data/raw/hpo
+  hpo_terms_path: data/raw/hpo/hpo_terms.tsv
+  phenotype_annotation_path: data/raw/hpo/phenotype.hpoa
+  genes_to_phenotype_path: data/raw/hpo/genes_to_phenotype.txt
+  negative_phenotype_annotation_path: data/raw/hpo/negative_phenotype_annotation.tab
   orphadata_dir: data/raw/orphadata
   mondo_path: data/raw/mondo/mondo.json
 

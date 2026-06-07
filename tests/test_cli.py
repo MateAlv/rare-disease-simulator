@@ -19,3 +19,10 @@ def test_cli_validate_loads_mvp_config() -> None:
     assert "NPC1" in result.output
     assert "PTPN11" in result.output
 
+
+def test_cli_fetch_sources_reports_configured_hpo_paths() -> None:
+    result = CliRunner().invoke(app, ["fetch-sources"])
+
+    assert result.exit_code == 0
+    assert "HPO terms: data/raw/hpo/hpo_terms.tsv" in result.output
+    assert "HPO negative annotations" in result.output

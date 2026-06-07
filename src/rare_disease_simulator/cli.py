@@ -75,9 +75,18 @@ def fetch_sources(ctx: typer.Context) -> None:
     """Validate configured source locations for future ingestion."""
 
     config = _config_from_context(ctx)
-    typer.echo(f"HPO directory: {config.sources.hpo_dir}")
-    typer.echo(f"Orphadata directory: {config.sources.orphadata_dir}")
-    typer.echo(f"MONDO path: {config.sources.mondo_path}")
+    source_paths = [
+        ("HPO directory", config.sources.hpo_dir),
+        ("HPO terms", config.sources.hpo_terms_path),
+        ("HPO phenotype annotations", config.sources.phenotype_annotation_path),
+        ("HPO gene-phenotype links", config.sources.genes_to_phenotype_path),
+        ("HPO negative annotations", config.sources.negative_phenotype_annotation_path),
+        ("Orphadata directory", config.sources.orphadata_dir),
+        ("MONDO path", config.sources.mondo_path),
+    ]
+    for label, path in source_paths:
+        status = "found" if path.exists() else "missing"
+        typer.echo(f"{label}: {path} [{status}]")
 
 
 @app.command("extract-profile-patches")
