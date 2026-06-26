@@ -10,11 +10,21 @@ import typer
 from pydantic import ValidationError
 
 from rare_disease_simulator import __version__
-from rare_disease_simulator.config import DEFAULT_CONFIG_PATH, AppConfig, load_config
+from rare_disease_simulator.config import (
+    DEFAULT_CONFIG_PATH,
+    AppConfig,
+    SimulationSettings,
+    load_config,
+)
+from rare_disease_simulator.exports.graphens import write_graphens_json
+from rare_disease_simulator.exports.jsonl import read_model_jsonl, write_jsonl
 from rare_disease_simulator.profiles.builder import (
     build_profiles_from_fixtures,
     write_profiles_jsonl,
 )
+from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
+from rare_disease_simulator.simulation.simulator import simulate_cases
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -148,24 +158,102 @@ def build_profiles(
         typer.echo(f"Quality warnings: {', '.join(result.warnings)}")
 
 
-@app.command("simulate")
-def simulate(ctx: typer.Context) -> None:
-    """Simulate synthetic patient cases from validated profiles."""
-
-    config = _config_from_context(ctx)
-    typer.echo(
-        "Simulation configured for "
-        f"{config.simulation.cases_per_disease_per_difficulty} cases per disease/difficulty "
-        f"with seed={config.simulation.seed}."
+def _simulation_config(settings: SimulationSettings) -> SimulationConfig:
+    return SimulationConfig(
+        cases_per_disease_per_difficulty=settings.cases_per_disease_per_difficulty,
+        difficulties=settings.difficulties,  # type: ignore[arg-type]
+        seed=settings.seed,
     )
 
 
+@app.command("simulate")
+def simulate(
+    ctx: typer.Context,
+    profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--profiles",
+            help="Override the configured profiles JSONL input path.",
+            exists=True,
+            dir_okay=False,
+            resolve_path=False,
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Override the configured rich cases JSONL output path.",
+            dir_okay=False,
+            resolve_path=False,
+        ),
+    ] = None,
+) -> None:
+    """Simulate synthetic patient cases from validated profiles."""
+
+    config = _config_from_context(ctx)
+    profiles_path = profiles or config.exports.profiles_path
+    if not profiles_path.exists():
+        raise typer.BadParameter(f"profiles file not found: {profiles_path}")
+
+    sim_config = _simulation_config(config.simulation)
+    profile_records = read_model_jsonl(profiles_path, DiseaseProfile)
+    cases: list[SyntheticCase] = []
+    for profile in profile_records:
+        cases.extend(simulate_cases(profile, sim_config))
+
+    output_path = output or config.exports.rich_cases_path
+    written = write_jsonl(output_path, cases)
+    typer.echo(
+        f"Simulated {written} case(s) from {len(profile_records)} profile(s) "
+        f"({sim_config.cases_per_disease_per_difficulty} per disease/difficulty, "
+        f"difficulties={','.join(sim_config.difficulties)}, seed={sim_config.seed})."
+    )
+    typer.echo(f"Wrote rich cases to {output_path}")
+
+
 @app.command("export-graphens")
-def export_graphens(ctx: typer.Context) -> None:
+def export_graphens(
+    ctx: typer.Context,
+    cases: Annotated[
+        Path | None,
+        typer.Option(
+            "--cases",
+            help="Override the configured rich cases JSONL input path.",
+            exists=True,
+            dir_okay=False,
+            resolve_path=False,
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Override the configured GraPhens JSON output path.",
+            dir_okay=False,
+            resolve_path=False,
+        ),
+    ] = None,
+) -> None:
     """Export simulated cases in GraPhens-compatible gene-grouped format."""
 
     config = _config_from_context(ctx)
-    typer.echo(f"GraPhens export path: {config.exports.graphens_path}")
+    cases_path = cases or config.exports.rich_cases_path
+    if not cases_path.exists():
+        raise typer.BadParameter(f"rich cases file not found: {cases_path}")
+
+    case_records = read_model_jsonl(cases_path, SyntheticCase)
+    output_path = output or config.exports.graphens_path
+    mapping_path = output_path.with_name(output_path.stem + ".mapping.json")
+    export = write_graphens_json(output_path, case_records, mapping_path=mapping_path)
+
+    total_rows = sum(len(rows) for rows in export.values())
+    typer.echo(
+        f"Exported {total_rows} case(s) across {len(export)} gene(s) to {output_path}"
+    )
+    typer.echo(f"Wrote row mapping to {mapping_path}")
 
 
 @app.command("validate")
