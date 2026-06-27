@@ -15,6 +15,8 @@ class MvpDisease(BaseModel):
 
     disease: str
     gene: str
+    orpha_id: str | None = None
+    omim: list[str] = Field(default_factory=list)
 
 
 class MvpConfig(BaseModel):

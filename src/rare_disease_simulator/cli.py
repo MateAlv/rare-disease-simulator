@@ -13,9 +13,13 @@ from rare_disease_simulator import __version__
 from rare_disease_simulator.config import (
     DEFAULT_CONFIG_PATH,
     AppConfig,
+    MvpDisease,
     SimulationSettings,
     load_config,
 )
+from rare_disease_simulator.data_sources.fetch import DiseaseQuery, fetch_disease_sources
+from rare_disease_simulator.data_sources.hpo_annotations import download_hpo_release
+from rare_disease_simulator.data_sources.http_client import HttpClient
 from rare_disease_simulator.exports.graphens import write_graphens_json
 from rare_disease_simulator.exports.jsonl import read_model_jsonl, write_jsonl
 from rare_disease_simulator.profiles.builder import (
@@ -101,6 +105,91 @@ def fetch_sources(ctx: typer.Context) -> None:
     for label, path in source_paths:
         status = "found" if path.exists() else "missing"
         typer.echo(f"{label}: {path} [{status}]")
+
+
+def _disease_query(disease: MvpDisease) -> DiseaseQuery:
+    return DiseaseQuery(
+        name=disease.disease,
+        gene=disease.gene,
+        orpha_id=disease.orpha_id,
+        omim=list(disease.omim),
+    )
+
+
+@app.command("download-hpo-release")
+def download_hpo_release_command(ctx: typer.Context) -> None:
+    """Download the HPO ontology and annotation files into the configured dir."""
+
+    config = _config_from_context(ctx)
+    written = download_hpo_release(HttpClient(), config.sources.hpo_dir)
+    for name, path in written.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("fetch-disease")
+def fetch_disease_command(
+    ctx: typer.Context,
+    disease: Annotated[
+        str | None,
+        typer.Option("--disease", help="Substring of a configured disease name to fetch."),
+    ] = None,
+    all_diseases: Annotated[
+        bool,
+        typer.Option("--all", help="Fetch every configured MVP disease."),
+    ] = False,
+    hpoa: Annotated[
+        Path | None,
+        typer.Option("--hpoa", help="Path to a local phenotype.hpoa for the structured backbone."),
+    ] = None,
+    output_root: Annotated[
+        Path,
+        typer.Option("--output-root", help="Directory to write per-disease bundles into."),
+    ] = Path("data/raw"),
+    retmax: Annotated[
+        int,
+        typer.Option("--retmax", help="Max PubMed articles to fetch per disease."),
+    ] = 5,
+    full_text: Annotated[
+        bool,
+        typer.Option("--full-text/--no-full-text", help="Attempt PMC open-access full text."),
+    ] = True,
+) -> None:
+    """Fetch all available sources for one or more configured diseases."""
+
+    config = _config_from_context(ctx)
+    hpoa_path = hpoa or config.sources.phenotype_annotation_path
+    resolved_hpoa = hpoa_path if Path(hpoa_path).exists() else None
+    if resolved_hpoa is None:
+        typer.echo("No phenotype.hpoa found; structured backbone will be skipped.")
+
+    if all_diseases:
+        targets = config.mvp.diseases
+    elif disease is not None:
+        needle = disease.lower()
+        targets = [d for d in config.mvp.diseases if needle in d.disease.lower()]
+    else:
+        raise typer.BadParameter("provide --disease NAME or --all")
+
+    if not targets:
+        raise typer.BadParameter(f"no configured disease matches {disease!r}")
+
+    client = HttpClient()
+    for target in targets:
+        manifest = fetch_disease_sources(
+            _disease_query(target),
+            client=client,
+            output_root=output_root,
+            hpoa_path=resolved_hpoa,
+            pubmed_retmax=retmax,
+            fetch_pmc_full_text=full_text,
+        )
+        statuses = ", ".join(
+            f"{name}={info.get('status', '?')}" for name, info in manifest.sources.items()
+        )
+        typer.echo(
+            f"{target.disease}: {manifest.snippet_count} snippet(s) "
+            f"-> {output_root}/{_disease_query(target).slug} [{statuses}]"
+        )
 
 
 @app.command("extract-profile-patches")

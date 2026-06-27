@@ -7,6 +7,9 @@ mvp:
   diseases:
     - disease: Niemann-Pick disease type C1
       gene: NPC1
+      orpha_id: ORPHA:646
+      omim:
+        - OMIM:257220
     - disease: Rett syndrome / atypical Rett syndrome
       gene: MECP2
     - disease: Duchenne muscular dystrophy
