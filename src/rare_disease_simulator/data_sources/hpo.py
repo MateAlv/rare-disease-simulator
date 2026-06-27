@@ -15,6 +15,7 @@ class HpoTerm:
     label: str
     parents: tuple[str, ...]
     is_phenotypic_abnormality: bool
+    synonyms: tuple[str, ...] = ()
 
 
 class HpoOntology:
@@ -39,6 +40,7 @@ class HpoOntology:
                     is_phenotypic_abnormality=_parse_bool(
                         row.get("is_phenotypic_abnormality", "")
                     ),
+                    synonyms=_parse_synonyms(row.get("synonyms", "")),
                 )
                 terms[term.hpo_id] = term
         return cls(terms, version=version)
@@ -53,6 +55,12 @@ class HpoOntology:
 
         term = self.terms.get(hpo_id)
         return term.label if term else None
+
+    def get_synonyms(self, hpo_id: str) -> tuple[str, ...]:
+        """Return known synonyms for a term."""
+
+        term = self.terms.get(hpo_id)
+        return term.synonyms if term else ()
 
     def get_direct_parents(self, hpo_id: str) -> tuple[str, ...]:
         """Return direct parent IDs for a term."""
@@ -90,6 +98,12 @@ def _parse_parent_ids(raw_value: str) -> tuple[str, ...]:
         return ()
     normalized = raw_value.replace("|", ",")
     return tuple(parent.strip() for parent in normalized.split(",") if parent.strip())
+
+
+def _parse_synonyms(raw_value: str) -> tuple[str, ...]:
+    if not raw_value:
+        return ()
+    return tuple(synonym.strip() for synonym in raw_value.split("|") if synonym.strip())
 
 
 def _parse_bool(raw_value: str) -> bool:
