@@ -45,7 +45,9 @@ def test_simulation_config_schema_accepts_mvp_defaults() -> None:
         seed=42,
     )
 
-    assert config.missingness_rate == 0.25
+    assert set(config.presets) == {"easy", "medium", "hard"}
+    assert config.frequency.unknown_frequency == 0.5
+    assert config.missingness.sex_unknown == 0.10
 
 
 def test_core_json_schema_export_contains_public_models() -> None:

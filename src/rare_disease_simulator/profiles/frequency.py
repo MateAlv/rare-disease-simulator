@@ -18,7 +18,7 @@ import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 
 HPO_FREQUENCY_RANGES: dict[str, tuple[float, float]] = {
     "HP:0040280": (1.0, 1.0),
@@ -170,7 +170,7 @@ def jeffreys_mean(successes: int, trials: int) -> float:
     return (successes + 0.5) / (trials + 1.0)
 
 
-@lru_cache(maxsize=None)
+@cache
 def jeffreys_interval(
     successes: int, trials: int, level: float = JEFFREYS_INTERVAL_LEVEL
 ) -> tuple[float, float]:

@@ -69,7 +69,7 @@ def test_phenotype_status_partition_is_consistent() -> None:
         negative_ids = {p.hpo_id for p in case.negative_phenotypes}
 
         assert positive_ids.isdisjoint(negative_ids)
-        assert case.patient.sex in {"male", "female"}
+        assert case.patient.sex in {"male", "female", "unknown"}
         for bucket in (
             case.missing_phenotypes,
             case.unknown_phenotypes,

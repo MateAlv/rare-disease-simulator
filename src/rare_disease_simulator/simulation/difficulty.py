@@ -3,57 +3,58 @@
 A difficulty preset controls how an underlying true phenotype set is degraded
 into an observed clinical picture: how many true positives are actually
 recorded, how unobserved positives split between ``missing`` and ``unknown``,
-how often explicit negatives are asked, how much nonspecific noise is added,
+how many "asked and absent" negatives and nonspecific noise terms a case gets,
 and how often specific terms are generalized to ontology ancestors.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Literal
 
-from rare_disease_simulator.simulation.schema import Difficulty
+from pydantic import BaseModel, ConfigDict, Field
+
+Difficulty = Literal["easy", "medium", "hard"]
 
 
-@dataclass(frozen=True)
-class DifficultyPreset:
+class DifficultyPreset(BaseModel):
     """Observation/degradation parameters for a single difficulty level."""
 
-    name: Difficulty
-    positive_observation_rate: float
-    cardinal_observation_boost: float
-    missing_vs_unknown_split: float
-    known_negative_rate: float
-    noise_term_rate: float
-    ontology_smoothing_rate: float
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    positive_observation_rate: float = Field(ge=0.0, le=1.0)
+    cardinal_observation_boost: float = Field(ge=0.0, le=1.0)
+    missing_vs_unknown_split: float = Field(ge=0.0, le=1.0)
+    negatives_mean: float = Field(
+        ge=0.0, description="Poisson mean of asked-and-absent terms per case."
+    )
+    noise_mean: float = Field(ge=0.0, description="Poisson mean of noise terms per case.")
+    ontology_smoothing_rate: float = Field(ge=0.0, le=1.0)
 
 
 EASY = DifficultyPreset(
-    name="easy",
     positive_observation_rate=0.92,
     cardinal_observation_boost=0.08,
     missing_vs_unknown_split=0.8,
-    known_negative_rate=0.6,
-    noise_term_rate=0.0,
+    negatives_mean=3.0,
+    noise_mean=0.0,
     ontology_smoothing_rate=0.0,
 )
 
 MEDIUM = DifficultyPreset(
-    name="medium",
     positive_observation_rate=0.75,
     cardinal_observation_boost=0.1,
     missing_vs_unknown_split=0.6,
-    known_negative_rate=0.35,
-    noise_term_rate=0.15,
+    negatives_mean=2.0,
+    noise_mean=1.0,
     ontology_smoothing_rate=0.15,
 )
 
 HARD = DifficultyPreset(
-    name="hard",
     positive_observation_rate=0.55,
     cardinal_observation_boost=0.1,
     missing_vs_unknown_split=0.5,
-    known_negative_rate=0.2,
-    noise_term_rate=0.35,
+    negatives_mean=1.0,
+    noise_mean=2.0,
     ontology_smoothing_rate=0.35,
 )
 
@@ -65,7 +66,7 @@ DIFFICULTY_PRESETS: dict[Difficulty, DifficultyPreset] = {
 
 
 def get_difficulty_preset(difficulty: Difficulty) -> DifficultyPreset:
-    """Return the preset for a difficulty level."""
+    """Return the built-in preset for a difficulty level."""
 
     try:
         return DIFFICULTY_PRESETS[difficulty]

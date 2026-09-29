@@ -3,6 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from rare_disease_simulator.build_info import sha256_file
 from rare_disease_simulator.cli import app
 from rare_disease_simulator.exports.jsonl import read_model_jsonl
 from rare_disease_simulator.profiles.schema import DiseaseProfile
@@ -155,3 +156,50 @@ def test_build_profiles_reports_the_omim_orpha_mapping(tmp_path: Path) -> None:
     assert summary["omim_orpha_map"]["omim_E_validated"] == 2
     assert summary["age_of_onset"]["gained_via_omim_mapping"] == 1
     assert "Onset coverage: 3/4 disease(s), 1 via OMIM-ORPHA mapping" in result.output
+
+
+def _simulate(profiles: Path, output: Path, *extra: str):
+    return CliRunner().invoke(
+        app,
+        [
+            *CONFIG,
+            "simulate",
+            "--profiles",
+            str(profiles),
+            "--output",
+            str(output),
+            "--hpo-json",
+            str(FIXTURES / "hp_mini.json"),
+            "--noise-vocabulary",
+            str(FIXTURES / "noise_vocabulary.tsv"),
+            *extra,
+        ],
+    )
+
+
+def test_simulate_samples_diseases_records_provenance_and_is_byte_stable(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles.jsonl"
+    assert _build(profiles, "--exclude-pmids", str(FIXTURES / "heldout_pmids.txt")).exit_code == 0
+    first, second = tmp_path / "a" / "cases.jsonl", tmp_path / "b" / "cases.jsonl"
+    options = ("--sample-diseases", "2", "--cases-per-disease", "3", "--difficulty", "medium")
+
+    result = _simulate(profiles, first, *options)
+    assert result.exit_code == 0, result.output
+    assert _simulate(profiles, second, *options).exit_code == 0
+
+    assert first.read_bytes() == second.read_bytes()
+    cases = read_model_jsonl(first, SyntheticCase)
+    assert len(cases) == 6
+    assert {case.metadata.difficulty for case in cases} == {"medium"}
+    versions = cases[0].metadata.source_versions
+    assert versions["profiles"] == f"sha256:{sha256_file(profiles)}"
+    assert versions["hp_json"].startswith("2026-02-16 sha256:")
+    assert "simulator_git" in versions and "HPO disease annotations" in versions
+
+    summary = json.loads((tmp_path / "a" / "cases.summary.json").read_text(encoding="utf-8"))
+    assert summary["diseases"]["simulated"] == 2
+    assert sum(summary["diseases"]["strata"].values()) == 2
+    assert summary["config"]["cases_per_disease_per_difficulty"] == 3
+    assert summary["config_hash"] == cases[0].metadata.config_hash
+    assert summary["output"]["sha256"] == sha256_file(first)
+    assert set(summary["inputs"]) == {"profiles", "hp_json", "noise_vocabulary"}

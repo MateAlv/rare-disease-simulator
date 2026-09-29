@@ -33,14 +33,15 @@ def test_build_graphens_export_groups_by_gene_with_row_mapping() -> None:
 
 def test_baseline_export_excludes_negatives() -> None:
     cases = _cases()
-    negative_ids = {
-        phenotype.hpo_id for case in cases for phenotype in case.negative_phenotypes
-    }
+    assert any(case.negative_phenotypes for case in cases)
 
-    export, _ = build_graphens_export(cases)
+    export, mapping = build_graphens_export(cases)
 
-    exported_ids = {hpo_id for rows in export.values() for row in rows for hpo_id in row}
-    assert exported_ids.isdisjoint(negative_ids)
+    by_id = {case.case_id: case for case in cases}
+    for gene, rows in export.items():
+        for row, case_id in zip(rows, mapping[gene], strict=True):
+            negative_ids = {p.hpo_id for p in by_id[case_id].negative_phenotypes}
+            assert negative_ids.isdisjoint(row)
 
 
 def test_write_graphens_json_writes_export_and_mapping(tmp_path) -> None:

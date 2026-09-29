@@ -5,11 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from rare_disease_simulator.profiles.schema import OnsetCategory, Provenance
+from rare_disease_simulator.simulation.difficulty import (
+    DIFFICULTY_PRESETS,
+    Difficulty,
+    DifficultyPreset,
+)
 
-Difficulty = Literal["easy", "medium", "hard"]
+__all__ = ["Difficulty", "DifficultyPreset"]
+
 Sex = Literal["female", "male", "other", "unknown"]
 AgeUnit = Literal["days", "months", "years"]
 PhenotypeObservationStatus = Literal["positive", "negative", "missing", "unknown", "noise"]
@@ -56,6 +62,9 @@ class CasePhenotype(StrictBaseModel):
     status: PhenotypeObservationStatus
     observed: bool | None = None
     source_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_hpo_id: str | None = Field(
+        default=None, description="Profile term this entry was generalized from."
+    )
     simulated_origin: str
     reason: str | None = None
 
@@ -73,7 +82,11 @@ class GeneratorMetadata(StrictBaseModel):
     config_hash: str
     seed: int
     difficulty: Difficulty
-    generated_at: datetime
+    generated_at: datetime | None = Field(
+        default=None,
+        description="Left unset by the simulator so identical runs give identical bytes; "
+        "the run summary records the wall-clock time.",
+    )
     provenance: list[Provenance] = Field(default_factory=list)
 
 
@@ -91,13 +104,191 @@ class SyntheticCase(StrictBaseModel):
     metadata: GeneratorMetadata
 
 
-class SimulationConfig(StrictBaseModel):
-    """Simulator configuration."""
+SexPriorKey = Literal[
+    "male_limited",
+    "female_limited",
+    "male_biased",
+    "female_biased",
+    "x_linked_dominant",
+    "unbiased",
+]
+NegativeSource = Literal["own_disease", "confounder", "not_annotation"]
 
-    cases_per_disease_per_difficulty: int = Field(gt=0)
-    difficulties: list[Difficulty]
-    seed: int
-    positive_observation_rate: float = Field(default=0.75, ge=0.0, le=1.0)
-    known_negative_rate: float = Field(default=0.10, ge=0.0, le=1.0)
-    missingness_rate: float = Field(default=0.25, ge=0.0, le=1.0)
-    ontology_smoothing_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+DEFAULT_P_MALE: dict[SexPriorKey, float] = {
+    "male_limited": 1.0,
+    "female_limited": 0.0,
+    "male_biased": 0.9,
+    "female_biased": 0.1,
+    "x_linked_dominant": 0.33,
+    "unbiased": 0.5,
+}
+
+
+class FrequencySettings(StrictBaseModel):
+    """Per-patient phenotype probability around the profile's frequency estimate."""
+
+    concentration: float = Field(
+        default=8.0,
+        gt=0.0,
+        description="Beta concentration k: p ~ Beta(k*mean, k*(1-mean)); larger is tighter.",
+    )
+    unknown_frequency: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Mean used for terms whose frequency is unknown (ADR-0007: never 'always').",
+    )
+
+
+class SexSettings(StrictBaseModel):
+    """Patient sex prior and sex-specific phenotype anchors."""
+
+    p_male: dict[SexPriorKey, float] = Field(
+        default_factory=lambda: dict(DEFAULT_P_MALE),
+        description="P(male) per disease sex prior (see simulator.sex_prior_key).",
+    )
+    male_only_anchors: list[str] = Field(
+        default_factory=lambda: ["HP:0010461", "HP:0012874"],
+        description="Terms under these (and not under a female anchor) are male-only.",
+    )
+    female_only_anchors: list[str] = Field(
+        default_factory=lambda: ["HP:0010460", "HP:0030012"],
+        description="Terms under these (and not under a male anchor) are female-only.",
+    )
+
+    @field_validator("p_male")
+    @classmethod
+    def _complete_probabilities(cls, value: dict[str, float]) -> dict[str, float]:
+        merged = {**DEFAULT_P_MALE, **value}
+        if any(not 0.0 <= probability <= 1.0 for probability in merged.values()):
+            raise ValueError("p_male values must lie in [0, 1]")
+        return merged
+
+
+class AgeSettings(StrictBaseModel):
+    """Onset and current-age sampling."""
+
+    onset_years: dict[OnsetCategory, tuple[float, float]] = Field(
+        default_factory=lambda: {
+            "antenatal": (0.0, 0.0),
+            "neonatal": (0.0, 0.0767),
+            "infantile": (0.0767, 1.0),
+            "childhood": (1.0, 5.0),
+            "juvenile": (5.0, 16.0),
+            "childhood_or_adolescent": (1.0, 16.0),
+            "adult": (16.0, 60.0),
+            "variable": (0.0, 60.0),
+        },
+        description="Uniform onset-age window in years per onset category (HPO definitions).",
+    )
+    unknown_onset_prior: dict[OnsetCategory, float] = Field(
+        default_factory=lambda: {
+            "antenatal": 0.11,
+            "neonatal": 0.35,
+            "infantile": 0.18,
+            "childhood": 0.14,
+            "juvenile": 0.05,
+            "adult": 0.13,
+            "variable": 0.04,
+        },
+        description="Onset category mix for diseases without onset data.",
+    )
+    duration_mean_years: float = Field(
+        default=5.0, gt=0.0, description="Mean of the exponential disease duration."
+    )
+    duration_max_years: float = Field(default=40.0, ge=0.0)
+    max_age_years: float = Field(default=90.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_windows(self) -> AgeSettings:
+        for category, (low, high) in self.onset_years.items():
+            if not 0.0 <= low <= high:
+                raise ValueError(f"onset_years[{category}] must satisfy 0 <= low <= high")
+        missing = [
+            category
+            for category in self.unknown_onset_prior
+            if category not in self.onset_years
+        ]
+        if missing:
+            raise ValueError(f"unknown_onset_prior uses categories without a window: {missing}")
+        return self
+
+
+class ProgressionSettings(StrictBaseModel):
+    """Raise non-congenital phenotype probability with duration in progressive diseases."""
+
+    max_boost: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="p' = p + (1-p) * max_boost * (1 - exp(-duration / timescale)); 0 disables.",
+    )
+    timescale_years: float = Field(default=10.0, gt=0.0)
+
+
+class NegativeSettings(StrictBaseModel):
+    """Asked-and-absent terms; the per-case count mean lives in the difficulty preset."""
+
+    max_per_case: int = Field(default=6, ge=0)
+    source_weights: dict[NegativeSource, float] = Field(
+        default_factory=lambda: {
+            "own_disease": 0.5,
+            "confounder": 0.35,
+            "not_annotation": 0.15,
+        },
+        description="Relative odds of each source per negative slot; 0 disables a source.",
+    )
+    confounders_top_n: int = Field(default=10, ge=0)
+    min_information_content: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="Only terms with IC >= this (nats) enter the confounder similarity index.",
+    )
+
+    @field_validator("source_weights")
+    @classmethod
+    def _complete_weights(cls, value: dict[str, float]) -> dict[str, float]:
+        merged = {source: 0.0 for source in ("own_disease", "confounder", "not_annotation")}
+        merged.update(value)
+        if any(weight < 0.0 for weight in merged.values()):
+            raise ValueError("source_weights must be non-negative")
+        return merged
+
+
+class MissingnessSettings(StrictBaseModel):
+    """Share of cases whose covariates or negatives are withheld."""
+
+    sex_unknown: float = Field(default=0.10, ge=0.0, le=1.0)
+    age_unknown: float = Field(default=0.20, ge=0.0, le=1.0)
+    onset_unknown: float = Field(default=0.30, ge=0.0, le=1.0)
+    no_negatives: float = Field(default=0.20, ge=0.0, le=1.0)
+
+
+class SimulationConfig(StrictBaseModel):
+    """Simulator configuration; every knob is used by ``simulation/simulator.py``."""
+
+    cases_per_disease_per_difficulty: int = Field(default=100, gt=0)
+    difficulties: list[Difficulty] = Field(default_factory=lambda: ["easy", "medium", "hard"])
+    seed: int = 42
+    presets: dict[Difficulty, DifficultyPreset] = Field(
+        default_factory=lambda: dict(DIFFICULTY_PRESETS),
+        description="Per-difficulty presets; difficulties not listed keep the built-in preset.",
+    )
+    frequency: FrequencySettings = Field(default_factory=FrequencySettings)
+    sex: SexSettings = Field(default_factory=SexSettings)
+    age: AgeSettings = Field(default_factory=AgeSettings)
+    progression: ProgressionSettings = Field(default_factory=ProgressionSettings)
+    negatives: NegativeSettings = Field(default_factory=NegativeSettings)
+    missingness: MissingnessSettings = Field(default_factory=MissingnessSettings)
+    max_redraws: int = Field(
+        default=20,
+        ge=0,
+        description="Redraws before forcing one observed positive into a case.",
+    )
+
+    @field_validator("presets")
+    @classmethod
+    def _complete_presets(
+        cls, value: dict[Difficulty, DifficultyPreset]
+    ) -> dict[Difficulty, DifficultyPreset]:
+        return {**DIFFICULTY_PRESETS, **value}

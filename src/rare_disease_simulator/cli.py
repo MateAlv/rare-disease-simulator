@@ -18,7 +18,6 @@ from rare_disease_simulator.config import (
     DEFAULT_CONFIG_PATH,
     AppConfig,
     MvpDisease,
-    SimulationSettings,
     load_config,
 )
 from rare_disease_simulator.data_sources.fetch import DiseaseQuery, fetch_disease_sources
@@ -33,9 +32,17 @@ from rare_disease_simulator.profiles.builder import (
 )
 from rare_disease_simulator.profiles.hpoa_builder import HpoaBuildInputs, build_profiles_from_hpoa
 from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
-from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
-from rare_disease_simulator.simulation.simulator import primary_gene, simulate_cases
+from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
+from rare_disease_simulator.simulation.schema import SyntheticCase
+from rare_disease_simulator.simulation.simulator import (
+    SIMULATOR_VERSION,
+    SexSpecificTerms,
+    config_hash,
+    primary_gene,
+    simulate_cases,
+)
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -397,14 +404,6 @@ def _build_profiles_from_hpoa(
     typer.echo(f"Build summary: {summary_path}")
 
 
-def _simulation_config(settings: SimulationSettings) -> SimulationConfig:
-    return SimulationConfig(
-        cases_per_disease_per_difficulty=settings.cases_per_disease_per_difficulty,
-        difficulties=settings.difficulties,  # type: ignore[arg-type]
-        seed=settings.seed,
-    )
-
-
 @app.command("simulate")
 def simulate(
     ctx: typer.Context,
@@ -452,6 +451,39 @@ def simulate(
             dir_okay=False,
         ),
     ] = None,
+    disease_ids: Annotated[
+        Path | None,
+        typer.Option(
+            "--disease-ids",
+            help="Simulate only these diseases (one id per line); confounders still use all.",
+            dir_okay=False,
+        ),
+    ] = None,
+    sample_diseases: Annotated[
+        int | None,
+        typer.Option(
+            "--sample-diseases",
+            min=1,
+            help="Simulate N diseases spread evenly over (inheritance, onset source) strata.",
+        ),
+    ] = None,
+    cases_per_disease: Annotated[
+        int | None,
+        typer.Option("--cases-per-disease", min=1, help="Override cases per disease/difficulty."),
+    ] = None,
+    difficulty: Annotated[
+        list[str] | None,
+        typer.Option("--difficulty", help="Override the difficulties (repeatable)."),
+    ] = None,
+    seed: Annotated[int | None, typer.Option("--seed", help="Override the seed.")] = None,
+    summary: Annotated[
+        Path | None,
+        typer.Option(
+            "--summary",
+            help="Run summary JSON path (default: <output stem>.summary.json).",
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Simulate synthetic patient cases from validated profiles."""
 
@@ -459,44 +491,140 @@ def simulate(
     profiles_path = profiles or config.exports.profiles_path
     if not profiles_path.exists():
         raise typer.BadParameter(f"profiles file not found: {profiles_path}")
+    started = time.perf_counter()
 
+    overrides: dict[str, object] = {}
+    if cases_per_disease is not None:
+        overrides["cases_per_disease_per_difficulty"] = cases_per_disease
+    if difficulty:
+        overrides["difficulties"] = difficulty
+    if seed is not None:
+        overrides["seed"] = seed
+    try:
+        sim_config = config.simulation.model_validate(
+            {**config.simulation.model_dump(), **overrides}
+        )
+    except ValidationError as exc:
+        raise typer.BadParameter(f"invalid simulation override: {exc}") from exc
+
+    hpo_path = hpo_json or config.sources.hpo_json_path
     if hpo_json is not None:
-        ontology = HpoOntology.from_json(_required_file(hpo_json, "hp.json"))
-    elif config.sources.hpo_json_path.is_file():
-        ontology = HpoOntology.from_json(config.sources.hpo_json_path)
-    else:
-        ontology = None
-        typer.echo("No hp.json found; simulating without ontology generalization.")
-    noise_terms = (
-        load_noise_vocabulary(_required_file(noise_vocabulary, "noise vocabulary"), ontology)
-        if noise_vocabulary is not None
-        else None
-    )
+        _required_file(hpo_json, "hp.json")
+    ontology = HpoOntology.from_json(hpo_path) if hpo_path.is_file() else None
+    if ontology is None:
+        typer.echo(
+            "No hp.json found; simulating without ontology generalization, sex-specific "
+            "anchors or ancestor/descendant checks on negatives."
+        )
+    noise_path = _optional_file(noise_vocabulary, "noise vocabulary")
+    noise_terms = load_noise_vocabulary(noise_path, ontology) if noise_path else None
     label_maps = load_label_maps(_required_file(labels, "labels")) if labels else None
 
-    sim_config = _simulation_config(config.simulation)
     profile_records = read_model_jsonl(profiles_path, DiseaseProfile)
+    targets = profile_records
+    strata: dict[str, int] | None = None
+    if disease_ids is not None:
+        wanted = {
+            line.strip()
+            for line in _required_file(disease_ids, "disease ids").read_text("utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+        targets = [profile for profile in targets if profile.disease_id in wanted]
+    if sample_diseases is not None:
+        targets, strata = sample_diseases_by_stratum(targets, sample_diseases, sim_config.seed)
+
+    confounders = ConfounderIndex(
+        profile_records,
+        ontology,
+        top_n=sim_config.negatives.confounders_top_n,
+        min_information_content=sim_config.negatives.min_information_content,
+        unknown_frequency=sim_config.frequency.unknown_frequency,
+    )
+    sex_terms = SexSpecificTerms(ontology, sim_config.sex)
+    inputs = {
+        "profiles": _input_record(profiles_path),
+        "hp_json": _input_record(hpo_path, ontology.version) if ontology else None,
+        "noise_vocabulary": _input_record(noise_path) if noise_path else None,
+        "labels": _input_record(labels) if labels else None,
+        "disease_ids": _input_record(disease_ids) if disease_ids else None,
+    }
+    git = git_revision()
+    source_versions = _source_versions(profile_records, inputs, git)
+
     cases: list[SyntheticCase] = []
-    for profile in profile_records:
+    for profile in targets:
         cases.extend(
             simulate_cases(
                 profile,
                 sim_config,
                 ontology=ontology,
                 noise_vocabulary=noise_terms,
+                confounders=confounders,
+                sex_terms=sex_terms,
                 gene_label=label_maps.genes.get(primary_gene(profile)) if label_maps else None,
                 disease_label=label_maps.diseases.get(profile.disease_id) if label_maps else None,
+                source_versions=source_versions,
             )
         )
 
     output_path = output or config.exports.rich_cases_path
     written = write_jsonl(output_path, cases)
+    run_summary = {
+        "simulate": {
+            "simulator_version": SIMULATOR_VERSION,
+            "package_version": __version__,
+            "simulator_git": git,
+            "generated_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
+            "wall_time_seconds": round(time.perf_counter() - started, 2),
+        },
+        "inputs": {key: value for key, value in inputs.items() if value is not None},
+        "config_hash": config_hash(sim_config),
+        "config": sim_config.model_dump(mode="json"),
+        "diseases": {
+            "in_profiles": len(profile_records),
+            "simulated": len(targets),
+            "strata": strata,
+        },
+        "output": {
+            "cases_path": str(output_path),
+            "cases_written": written,
+            "bytes": output_path.stat().st_size,
+            "sha256": sha256_file(output_path),
+        },
+    }
+    summary_path = summary or output_path.with_name(f"{output_path.stem}.summary.json")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(run_summary, indent=2) + "\n", encoding="utf-8")
     typer.echo(
-        f"Simulated {written} case(s) from {len(profile_records)} profile(s) "
+        f"Simulated {written} case(s) from {len(targets)} of {len(profile_records)} profile(s) "
         f"({sim_config.cases_per_disease_per_difficulty} per disease/difficulty, "
         f"difficulties={','.join(sim_config.difficulties)}, seed={sim_config.seed})."
     )
     typer.echo(f"Wrote rich cases to {output_path}")
+    typer.echo(f"Run summary: {summary_path}")
+
+
+def _input_record(path: Path, version: str | None = None) -> dict[str, object]:
+    return {"path": str(path), "version": version, "sha256": sha256_file(path)}
+
+
+def _source_versions(
+    profiles: list[DiseaseProfile],
+    inputs: dict[str, dict[str, object] | None],
+    git: dict[str, object],
+) -> dict[str, str]:
+    """Compact per-case provenance: profile sources, run inputs and the simulator SHA."""
+
+    versions: dict[str, str] = {}
+    for item in profiles[0].provenance if profiles else []:
+        source = item.source
+        versions[source.name] = f"{source.version or '-'} sha256:{source.sha256 or '-'}"
+    for key, record in inputs.items():
+        if record is not None:
+            version = f"{record['version']} " if record.get("version") else ""
+            versions[key] = f"{version}sha256:{record['sha256']}"
+    versions["simulator_git"] = f"{git.get('sha')}{'-dirty' if git.get('dirty') else ''}"
+    return dict(sorted(versions.items()))
 
 
 @app.command("export-graphens")

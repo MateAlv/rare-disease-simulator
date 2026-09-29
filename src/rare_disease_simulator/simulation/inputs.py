@@ -22,9 +22,11 @@ class LabelMaps:
 def load_noise_vocabulary(
     path: Path | str, ontology: HpoOntology | None = None
 ) -> list[NoiseTerm]:
-    """Read a TSV with an ``hpo_id`` column and an optional ``label`` column.
+    """Read a TSV with an ``hpo_id`` column and optional ``label`` and ``weight`` columns.
 
-    Blank labels are filled from the ontology when one is given.
+    Blank labels are filled from the ontology when one is given. ``weight``
+    (default 1) sets how often a term is drawn relative to the others, e.g.
+    its frequency among R1-train patients.
     """
 
     terms: list[NoiseTerm] = []
@@ -36,7 +38,10 @@ def load_noise_vocabulary(
             label = (row.get("label") or "").strip()
             if not label and ontology is not None:
                 label = ontology.get_label(hpo_id) or ""
-            terms.append(NoiseTerm(hpo_id=hpo_id, label=label or hpo_id))
+            weight = float((row.get("weight") or "").strip() or 1.0)
+            if weight < 0.0:
+                raise ValueError(f"{path}: negative weight for {hpo_id}")
+            terms.append(NoiseTerm(hpo_id=hpo_id, label=label or hpo_id, weight=weight))
     return terms
 
 
