@@ -65,6 +65,7 @@ All notable changes to this project are documented here. The format follows
 - The unused `SimulationConfig` rates (`positive_observation_rate`, `known_negative_rate`, `missingness_rate`, `ontology_smoothing_rate`); the presets hold them.
 
 ### Fixed
+- Confounder similarities were summed in string-hash order, so near-tied confounders could rank differently from one process to the next and "identical" runs were not byte-identical (3 of 50,500 gene-first cases differed). Term vectors are now built in sorted order.
 - When redraws failed and no profile term suited the patient's sex, the forced positive could be a sex-inappropriate term (seen once in 50,500 gene-first cases: a male with ovarian carcinoma). The patient now takes the only sex that can present the disease.
 - A recorded term whose generalized parent was already in the case was dropped from the case. It is now kept as `missing` with `reason: recorded_as_generalized`, so the case (and `validate`'s calibration) holds every term the patient has.
 - `simulate` now passes the ontology, noise vocabulary and gene/disease labels to the simulator. Before, it dropped them, so ontology generalization and noise injection never ran from the CLI.
