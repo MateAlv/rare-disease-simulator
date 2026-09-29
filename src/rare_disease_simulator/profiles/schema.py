@@ -29,6 +29,7 @@ OnsetCategory = Literal[
     "unknown",
 ]
 SexBiasValue = Literal["male", "female", "none", "unknown"]
+SexRestriction = Literal["male", "female"]
 GeneAssociationType = Literal["causal", "susceptibility", "unknown"]
 ProgressionPattern = Literal["progressive", "non_progressive", "episodic", "variable", "unknown"]
 
@@ -50,6 +51,7 @@ class SourceReference(StrictBaseModel):
     section: str | None = None
     license: str | None = None
     redistribution_allowed: bool = False
+    sha256: str | None = None
 
 
 class Provenance(StrictBaseModel):
@@ -75,8 +77,10 @@ class DiseaseGene(StrictBaseModel):
     """Gene associated with a disease profile."""
 
     symbol: str
+    ncbi_gene_id: str | None = None
     association_type: GeneAssociationType = "unknown"
     inheritance: list[str] = Field(default_factory=list)
+    inheritance_hpo_ids: list[str] = Field(default_factory=list)
     provenance: list[Provenance] = Field(default_factory=list)
 
 
@@ -93,9 +97,15 @@ class PhenotypeAssociation(StrictBaseModel):
     hpo_id: str
     label: str
     frequency: FrequencyCategory = "unknown"
+    frequency_raw: str | None = None
     probability_range: ProbabilityRange | None = None
     diagnostic_role: DiagnosticRole = "unknown"
     onset: OnsetCategory = "unknown"
+    onset_hpo_id: str | None = None
+    sex_restriction: SexRestriction | None = Field(
+        default=None,
+        description="Only observed in patients of this sex (HPOA sex column).",
+    )
     severity: str = "unknown"
     temporality: str = "unknown"
     source: list[str] = Field(default_factory=list)
@@ -118,6 +128,7 @@ class AgeOfOnset(StrictBaseModel):
 
     category: OnsetCategory = "unknown"
     distribution: dict[OnsetCategory, float] = Field(default_factory=dict)
+    hpo_ids: list[str] = Field(default_factory=list)
     provenance: list[Provenance] = Field(default_factory=list)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
@@ -144,6 +155,7 @@ class ProfileQuality(StrictBaseModel):
     profile_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     warnings: list[str] = Field(default_factory=list)
     fixture: bool = False
+    counters: dict[str, int] = Field(default_factory=dict)
 
 
 class DiseaseProfile(StrictBaseModel):
