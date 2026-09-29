@@ -203,3 +203,67 @@ def test_simulate_samples_diseases_records_provenance_and_is_byte_stable(tmp_pat
     assert summary["config_hash"] == cases[0].metadata.config_hash
     assert summary["output"]["sha256"] == sha256_file(first)
     assert set(summary["inputs"]) == {"profiles", "hp_json", "noise_vocabulary"}
+
+
+def test_build_profiles_adds_diseases_only_gene_profiles_link(tmp_path: Path) -> None:
+    plain, linked = tmp_path / "plain.jsonl", tmp_path / "linked.jsonl"
+    mask = ("--exclude-pmids", str(FIXTURES / "heldout_pmids.txt"))
+    assert _build(plain, *mask).exit_code == 0
+    result = _build(linked, *mask, "--gene-profiles", str(FIXTURES / "gene_profiles.json"))
+
+    assert result.exit_code == 0, result.output
+    plain_ids = {p.disease_id for p in read_model_jsonl(plain, DiseaseProfile)}
+    linked_profiles = {p.disease_id: p for p in read_model_jsonl(linked, DiseaseProfile)}
+    assert set(linked_profiles) - plain_ids == {"OMIM:100006"}
+    added = linked_profiles["OMIM:100006"]
+    assert [(g.symbol, g.association_type) for g in added.genes] == [("GENEA", "unknown")]
+    assert added.provenance[-1].source.name == "gene profiles"
+    summary = json.loads((tmp_path / "linked.summary.json").read_text("utf-8"))
+    assert summary["diseases"]["built_from_gene_profiles_links"] == 1
+    assert summary["inputs"]["gene_profiles"]["sha256"] == sha256_file(
+        FIXTURES / "gene_profiles.json"
+    )
+
+
+def test_build_profiles_holds_out_listed_annotations(tmp_path: Path) -> None:
+    output = tmp_path / "profiles.jsonl"
+    holdout = FIXTURES / "annotation_holdout.tsv"
+
+    result = _build(
+        output,
+        "--exclude-pmids",
+        str(FIXTURES / "heldout_pmids.txt"),
+        "--drop-annotations",
+        str(holdout),
+    )
+
+    assert result.exit_code == 0, result.output
+    # 7 rows: the obsolete HP:0000999 row of OMIM:100001 resolves to the held-out HP:0001251.
+    assert "Held out 4 of 6 listed annotation(s) (7 row(s)) across 2 disease(s)" in result.output
+    profiles = {p.disease_id: p for p in read_model_jsonl(output, DiseaseProfile)}
+    assert "OMIM:100002" not in profiles
+    alpha = profiles["OMIM:100001"]
+    assert "HP:0001251" not in {p.hpo_id for p in alpha.phenotypes}
+    assert "HP:0000047" in {n.hpo_id for n in alpha.negative_phenotypes}
+    assert "annotation holdout" in {item.source.name for item in alpha.provenance}
+    summary = json.loads((tmp_path / "profiles.summary.json").read_text(encoding="utf-8"))
+    assert summary["annotation_holdout"] == {
+        "enabled": True,
+        "pairs_listed": 6,
+        "pairs_dropped": 4,
+        "pairs_unmatched": 2,
+        "rows_dropped": 7,
+        "diseases_affected": 2,
+        "diseases_dropped_zero_positive": 1,
+    }
+    assert summary["inputs"]["drop_annotations"]["sha256"] == sha256_file(holdout)
+
+
+def test_build_profiles_rejects_a_malformed_holdout(tmp_path: Path) -> None:
+    holdout = tmp_path / "holdout.tsv"
+    holdout.write_text("disease\tterm\nOMIM:1\tHP:1\n", encoding="utf-8")
+
+    result = _build(tmp_path / "profiles.jsonl", "--drop-annotations", str(holdout))
+
+    assert result.exit_code != 0
+    assert "disease_id and hpo_id" in str(result.exception)

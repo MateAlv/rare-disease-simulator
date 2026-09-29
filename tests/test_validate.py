@@ -86,6 +86,33 @@ def test_each_invariant_violation_is_detected(ontology) -> None:
     }
 
 
+def test_gene_other_negative_on_the_profile_and_recorded_sex_prior(ontology) -> None:
+    case = _simulate(ontology)[0]
+    annotated = next(p.hpo_id for p in TRUE.phenotypes if p.hpo_id not in _present(case))
+    marked = case.model_copy(
+        update={
+            "negative_phenotypes": [
+                _phenotype(annotated, "negative", "negative_own_gene_other_disease")
+            ],
+            "metadata": case.metadata.model_copy(update={"sex_prior_key": "male_biased"}),
+        }
+    )
+
+    report = _report([marked], ontology)
+
+    assert report["violations"]["by_type"]["gene_other_negative_annotated_to_profile"] == 1
+    assert set(report["sex"]["by_prior"]) == {"male_biased"}
+    assert report["genes"] == 1
+
+
+def _present(case) -> set[str]:
+    return {
+        p.source_hpo_id or p.hpo_id
+        for bucket in (case.positive_phenotypes, case.missing_phenotypes, case.unknown_phenotypes)
+        for p in bucket
+    } | {p.hpo_id for p in case.positive_phenotypes}
+
+
 def test_onset_expectation_uses_the_profile_distribution(ontology) -> None:
     adult = TRUE.model_copy(update={"age_of_onset": AgeOfOnset(category="adult")})
     cases = _simulate(ontology, profile=adult)

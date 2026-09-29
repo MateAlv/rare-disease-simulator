@@ -16,19 +16,27 @@ The generative model for one case (``docs/README.md`` documents every knob):
    present with probability ``p``.
 3. **Observation.** The difficulty preset decides which present terms are
    recorded (the rest become ``missing``/``unknown``) and which are generalized
-   to a parent term. Cases with no recorded term are redrawn; after
+   to a parent term. A term whose generalization is already recorded becomes
+   ``missing`` (``reason: recorded_as_generalized``), so every truly present
+   term appears in the case. Cases with no recorded term are redrawn; after
    ``max_redraws`` the most probable eligible term is forced in.
-4. **Negatives.** 0..k "asked and absent" terms from three sources: the
-   disease's own terms the patient lacks (weighted by frequency), hallmark
-   terms of confounder diseases the true disease never annotates, and the
-   profile's explicit ``NOT`` annotations. A negated term is never equal to,
-   an ancestor of, or a descendant of a present term (or of another negated
-   term).
+4. **Negatives.** 0..k "asked and absent" terms from four sources: the
+   disease's own terms the patient lacks (weighted by frequency), the gene's
+   other diseases' terms (gene-first mode), hallmark terms of confounder
+   diseases the true disease never annotates, and the profile's explicit
+   ``NOT`` annotations. A negated term is never equal to, an ancestor of, or a
+   descendant of a present term (or of another negated term).
 5. **Noise** from an external vocabulary, never related to a negated term.
 6. **Covariate missingness** hides sex, age, onset or all negatives.
 
 Every case is fully determined by ``(seed, disease_id, difficulty, index)``
 and the configuration, so reruns reproduce identical bytes.
+
+**Gene-first mode** (:func:`simulate_gene_cases`) labels cases with a GNN
+gene. Each case first draws one of the gene's disease entities by
+``sim_weight`` and then one of the entity's profiles uniformly, with the key
+``(seed, "gene:" + symbol, difficulty, index)``; the entity's inheritance sets
+the sex prior.
 """
 
 from __future__ import annotations
@@ -38,11 +46,13 @@ import json
 import math
 import random
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TypeVar
 
 from rare_disease_simulator import __version__
+from rare_disease_simulator.data_sources.gene_profiles import EntityOption, GeneTarget
 from rare_disease_simulator.data_sources.hpo import HpoOntology
+from rare_disease_simulator.profiles.inheritance import SEX_LIMITED_EXPRESSION, derive_sex_bias
 from rare_disease_simulator.profiles.schema import (
     DiseaseProfile,
     OnsetCategory,
@@ -66,7 +76,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.2.0"
+SIMULATOR_VERSION = "0.3.0"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -75,13 +85,22 @@ FEMALE_LIMITED = "HP:0034344"
 Y_LINKED = "HP:0001450"
 X_LINKED_DOMINANT = "HP:0001423"
 
-NEGATIVE_SOURCES: tuple[NegativeSource, ...] = ("own_disease", "confounder", "not_annotation")
+NEGATIVE_SOURCES: tuple[NegativeSource, ...] = (
+    "own_disease",
+    "own_gene_other_disease",
+    "confounder",
+    "not_annotation",
+)
 NEGATIVE_ORIGINS: dict[NegativeSource, str] = {
     "own_disease": "negative_own_disease",
+    "own_gene_other_disease": "negative_own_gene_other_disease",
     "confounder": "negative_confounder",
     "not_annotation": "negative_not_annotation",
 }
+GENE_ONLY_SOURCES: frozenset[NegativeSource] = frozenset({"own_gene_other_disease"})
+EQUIVALENT_PROFILE_REASON = "typical_feature_absent_equivalent_profile"
 FORCED_REASON = "forced_min_one"
+MERGED_REASON = "recorded_as_generalized"
 
 _T = TypeVar("_T")
 
@@ -112,13 +131,35 @@ def sex_prior_key(profile: DiseaseProfile) -> SexPriorKey:
     """
 
     inheritance = {hpo_id for gene in profile.genes for hpo_id in gene.inheritance_hpo_ids}
+    bias = profile.sex_bias.value if profile.sex_bias else "unknown"
+    return _sex_key(inheritance, bias)
+
+
+def entity_sex_prior_key(
+    inheritance: Sequence[str], profile: DiseaseProfile, ontology: HpoOntology | None
+) -> SexPriorKey:
+    """Sex prior of a gene-first case: the entity's inheritance, else the profile's.
+
+    The entity's modes of inheritance (ClinGen when curated) replace the
+    profile's, but sex-limited expression is a phenotype fact only HPOA
+    records, so the profile's male-/female-limited terms are kept.
+    """
+
+    if not inheritance:
+        return sex_prior_key(profile)
+    profile_ids = {hpo_id for gene in profile.genes for hpo_id in gene.inheritance_hpo_ids}
+    ids = set(inheritance) | (profile_ids & set(SEX_LIMITED_EXPRESSION))
+    bias, _ = derive_sex_bias(sorted(ids), ontology)
+    return _sex_key(ids, bias or "unknown")
+
+
+def _sex_key(inheritance: set[str], bias: str) -> SexPriorKey:
     male_limited = MALE_LIMITED in inheritance or Y_LINKED in inheritance
     female_limited = FEMALE_LIMITED in inheritance
     if male_limited and not female_limited:
         return "male_limited"
     if female_limited and not male_limited:
         return "female_limited"
-    bias = profile.sex_bias.value if profile.sex_bias else "unknown"
     if bias == "male":
         return "male_biased"
     if bias == "female":
@@ -181,9 +222,12 @@ class _DiseaseModel:
     profile: DiseaseProfile
     terms: list[_Term]
     sex_key: SexPriorKey
-    profile_ids: frozenset[str]
+    disease_term_ids: frozenset[str]
     confounder_terms: list[_Candidate]
     not_terms: list[_Candidate]
+    equivalent_terms: list[_Candidate] = field(default_factory=list)
+    gene_other_terms: list[_Candidate] = field(default_factory=list)
+    gene_first: bool = False
 
 
 @dataclass
@@ -232,7 +276,8 @@ def simulate_cases(
     for difficulty in config.difficulties:
         preset = config.presets[difficulty]
         for index in range(config.cases_per_disease_per_difficulty):
-            rng = _case_rng(config.seed, profile.disease_id, difficulty, index)
+            seed = case_seed(config.seed, profile.disease_id, difficulty, index)
+            rng = random.Random(seed)
             case = _simulate_one_case(
                 model,
                 config=config,
@@ -252,14 +297,9 @@ def simulate_cases(
                         gene_label=gene_label,
                         disease_label=disease_label,
                     ),
-                    metadata=GeneratorMetadata(
-                        generator_version=__version__,
-                        profile_version=profile_version,
-                        source_versions=dict(source_versions or {}),
-                        simulator_version=SIMULATOR_VERSION,
-                        config_hash=cfg_hash,
-                        seed=config.seed,
-                        difficulty=difficulty,
+                    metadata=_metadata(
+                        config, cfg_hash, difficulty, seed, model.sex_key,
+                        profile_version, source_versions,
                     ),
                     **case,
                 )
@@ -267,12 +307,102 @@ def simulate_cases(
     return cases
 
 
-def _case_rng(seed: int, disease_id: str, difficulty: Difficulty, index: int) -> random.Random:
-    """Build a per-case RNG that is stable across runs and machines."""
+def simulate_gene_cases(
+    target: GeneTarget,
+    profiles: Mapping[str, DiseaseProfile],
+    config: SimulationConfig,
+    *,
+    ontology: HpoOntology | None = None,
+    noise_vocabulary: Sequence[NoiseTerm] | None = None,
+    confounders: ConfounderIndex | None = None,
+    profile_version: str | None = None,
+    source_versions: Mapping[str, str] | None = None,
+    sex_terms: SexSpecificTerms | None = None,
+) -> list[SyntheticCase]:
+    """Simulate all configured cases for one GNN gene (gene-first mode).
 
-    key = f"{seed}|{disease_id}|{difficulty}|{index}"
-    digest = hashlib.sha256(key.encode("utf-8")).digest()
-    return random.Random(int.from_bytes(digest[:8], "big"))
+    ``cases_per_disease_per_difficulty`` cases per difficulty. Each case draws
+    an entity of ``target`` by ``sim_weight``, then one of the entity's
+    profiles uniformly (profiles of one entity describe the same disease, so
+    none is preferred), and is labelled with the gene's v3 symbol and class
+    index. Every profile id in ``target`` must be in ``profiles``.
+    """
+
+    sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
+    cfg_hash = config_hash(config)
+    models: dict[tuple[str, str], _DiseaseModel] = {}
+    entity_weights = [entity.sim_weight for entity in target.entities]
+    cases: list[SyntheticCase] = []
+    for difficulty in config.difficulties:
+        preset = config.presets[difficulty]
+        for index in range(config.cases_per_disease_per_difficulty):
+            seed = case_seed(config.seed, f"gene:{target.symbol}", difficulty, index)
+            rng = random.Random(seed)
+            entity = target.entities[_weighted_index(entity_weights, rng)]
+            profile_id = entity.profile_ids[rng.randrange(len(entity.profile_ids))]
+            model = models.get((entity.entity, profile_id))
+            if model is None:
+                model = _gene_model(
+                    target, entity, profiles[profile_id], profiles, config, confounders, ontology
+                )
+                models[(entity.entity, profile_id)] = model
+            case = _simulate_one_case(
+                model,
+                config=config,
+                preset=preset,
+                rng=rng,
+                ontology=ontology,
+                noise_vocabulary=noise_vocabulary or (),
+                sex_terms=sex_terms,
+            )
+            profile = model.profile
+            cases.append(
+                SyntheticCase(
+                    case_id=f"synthetic-gene-{target.symbol}-{difficulty}-{index:06d}",
+                    target=CaseTarget(
+                        disease_id=profile.disease_id,
+                        disease_name=profile.disease_name,
+                        gene=target.symbol,
+                        gene_label=target.index,
+                        entity_id=entity.entity,
+                    ),
+                    metadata=_metadata(
+                        config, cfg_hash, difficulty, seed, model.sex_key,
+                        profile_version, source_versions,
+                    ),
+                    **case,
+                )
+            )
+    return cases
+
+
+def _metadata(
+    config: SimulationConfig,
+    cfg_hash: str,
+    difficulty: Difficulty,
+    seed: int,
+    sex_key: SexPriorKey,
+    profile_version: str | None,
+    source_versions: Mapping[str, str] | None,
+) -> GeneratorMetadata:
+    return GeneratorMetadata(
+        generator_version=__version__,
+        profile_version=profile_version,
+        source_versions=dict(source_versions or {}),
+        simulator_version=SIMULATOR_VERSION,
+        config_hash=cfg_hash,
+        seed=config.seed,
+        case_seed=seed,
+        sex_prior_key=sex_key,
+        difficulty=difficulty,
+    )
+
+
+def case_seed(seed: int, key: str, difficulty: Difficulty, index: int) -> int:
+    """Per-case RNG seed, stable across runs and machines."""
+
+    digest = hashlib.sha256(f"{seed}|{key}|{difficulty}|{index}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 def _disease_model(
@@ -317,10 +447,107 @@ def _disease_model(
         profile=profile,
         terms=terms,
         sex_key=sex_prior_key(profile),
-        profile_ids=frozenset(phenotype.hpo_id for phenotype in profile.phenotypes),
+        disease_term_ids=frozenset(phenotype.hpo_id for phenotype in profile.phenotypes),
         confounder_terms=confounder_terms,
         not_terms=not_terms,
     )
+
+
+def _gene_model(
+    target: GeneTarget,
+    entity: EntityOption,
+    profile: DiseaseProfile,
+    profiles: Mapping[str, DiseaseProfile],
+    config: SimulationConfig,
+    confounders: ConfounderIndex | None,
+    ontology: HpoOntology | None,
+) -> _DiseaseModel:
+    """A disease model for a gene-first case: entity sex prior and gene-level pools."""
+
+    model = _disease_model(profile, config, confounders)
+    unknown = config.frequency.unknown_frequency
+    own_terms = _entity_terms(entity, profiles, unknown)
+    equivalent = [
+        _Candidate(
+            hpo_id=hpo_id,
+            label=label,
+            weight=mean,
+            sex_restriction=restriction,
+            reason=EQUIVALENT_PROFILE_REASON,
+            source_probability=mean,
+        )
+        for hpo_id, (label, mean, restriction) in sorted(own_terms.items())
+        if hpo_id not in model.disease_term_ids
+    ]
+
+    other: dict[str, tuple[str, float, float, SexRestriction | None, str]] = {}
+    for option in target.entities:
+        if option.entity == entity.entity:
+            continue
+        terms = _entity_terms(option, profiles, unknown)
+        total = sum(mean for _, mean, _ in terms.values())
+        if total <= 0.0:
+            continue
+        for hpo_id, (label, mean, restriction) in sorted(terms.items()):
+            if hpo_id in own_terms or mean <= 0.0:
+                continue
+            weight = option.sim_weight * mean / total
+            previous = other.get(hpo_id)
+            if previous is None:
+                other[hpo_id] = (label, weight, mean, restriction, option.entity)
+                continue
+            best = option.entity if weight > previous[1] else previous[4]
+            other[hpo_id] = (
+                label,
+                previous[1] + weight,
+                max(previous[2], mean),
+                previous[3] or restriction,
+                best,
+            )
+    gene_other = [
+        _Candidate(
+            hpo_id=hpo_id,
+            label=label,
+            weight=weight,
+            sex_restriction=restriction,
+            reason=f"gene_other_disease:{source_entity}",
+            source_probability=mean,
+        )
+        for hpo_id, (label, weight, mean, restriction, source_entity) in sorted(other.items())
+    ]
+    return replace(
+        model,
+        sex_key=entity_sex_prior_key(entity.inheritance, profile, ontology),
+        disease_term_ids=model.disease_term_ids | frozenset(own_terms),
+        equivalent_terms=equivalent,
+        gene_other_terms=gene_other,
+        gene_first=True,
+    )
+
+
+def _entity_terms(
+    entity: EntityOption, profiles: Mapping[str, DiseaseProfile], unknown_frequency: float
+) -> dict[str, tuple[str, float, SexRestriction | None]]:
+    """Union of an entity's profile terms: label, highest mean and any sex restriction."""
+
+    terms: dict[str, tuple[str, float, SexRestriction | None]] = {}
+    for profile_id in entity.profile_ids:
+        for phenotype in profiles[profile_id].phenotypes:
+            mean = (
+                phenotype.frequency_estimate
+                if phenotype.frequency_estimate is not None
+                else unknown_frequency
+            )
+            previous = terms.get(phenotype.hpo_id)
+            if previous is None:
+                terms[phenotype.hpo_id] = (phenotype.label, mean, phenotype.sex_restriction)
+            else:
+                terms[phenotype.hpo_id] = (
+                    previous[0],
+                    max(previous[1], mean),
+                    previous[2] or phenotype.sex_restriction,
+                )
+    return terms
 
 
 def _simulate_one_case(
@@ -343,6 +570,7 @@ def _simulate_one_case(
         if observation.positives:
             break
     if observation is None or not observation.positives:
+        patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
 
     negatives = _sample_negatives(
@@ -461,6 +689,14 @@ def _observe(
         if rng.random() < observe_rate:
             hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng)
             if hpo_id in observed_ids:
+                # The record already shows this term, so the specific one stays
+                # unrecorded; keeping it here keeps the case's truth complete.
+                if phenotype.hpo_id not in observed_ids:
+                    observation.missing.append(
+                        _unobserved(
+                            phenotype, probability, status="missing", reason=MERGED_REASON
+                        )
+                    )
                 continue
             observed_ids.add(hpo_id)
             observation.present_ids.add(hpo_id)
@@ -488,6 +724,28 @@ def _observe(
                 )
             )
     return observation
+
+
+def _presentable_sex(
+    model: _DiseaseModel, patient: _Patient, sex_terms: SexSpecificTerms
+) -> _Patient:
+    """The patient, switched to the other sex when no profile term fits theirs.
+
+    A disease whose every term is restricted to one sex (e.g. only ovarian
+    findings) cannot present in the other, so forcing a term would emit a
+    sex-inappropriate finding.
+    """
+
+    def admits(sex: Sex) -> bool:
+        return any(
+            sex_terms.allowed(term.phenotype.hpo_id, term.phenotype.sex_restriction, sex)
+            for term in model.terms
+        )
+
+    other: Sex = "female" if patient.sex == "male" else "male"
+    if admits(patient.sex) or not admits(other):
+        return patient
+    return replace(patient, sex=other)
 
 
 def _forced_observation(
@@ -617,20 +875,26 @@ def _sample_negatives(
         for term in model.terms
         if term.phenotype.hpo_id not in present_ids
     ]
+    if config.negatives.own_disease_pool == "entity":
+        own.extend(term for term in model.equivalent_terms if term.hpo_id not in present_ids)
     pools: dict[NegativeSource, list[_Candidate]] = {
         "own_disease": admissible(own),
+        "own_gene_other_disease": admissible(model.gene_other_terms),
         "confounder": admissible(model.confounder_terms),
         "not_annotation": admissible(model.not_terms),
     }
+    # A source the mode cannot provide is left out of the draw; a source that
+    # exists but runs dry for this case keeps its slots empty (below).
     weighted_sources = [
         (source, config.negatives.source_weights[source])
         for source in NEGATIVE_SOURCES
         if config.negatives.source_weights[source] > 0.0
+        and (model.gene_first or source not in GENE_ONLY_SOURCES)
     ]
     if not weighted_sources:
         return []
-    # Slots go to sources before any candidate is drawn, and a slot its source
-    # cannot fill stays empty, so the realized mix follows the configured weights.
+    # Slots go to sources before any candidate is drawn, and by default a slot
+    # its source cannot fill stays empty, so the realized mix follows the weights.
     slots = {source: 0 for source in NEGATIVE_SOURCES}
     for _ in range(count):
         slots[_weighted_choice(weighted_sources, rng)] += 1
@@ -638,15 +902,14 @@ def _sample_negatives(
     present = _RelatedTerms(ontology, present_ids)
     chosen = _RelatedTerms(ontology)
     negatives: list[CasePhenotype] = []
-    for source in NEGATIVE_SOURCES:
+
+    def fill(source: NegativeSource) -> bool:
         pool = pools[source]
-        filled = 0
-        while pool and filled < slots[source]:
+        while pool:
             candidate = pool.pop(_weighted_index([item.weight for item in pool], rng))
             if present.related(candidate.hpo_id) or chosen.related(candidate.hpo_id):
                 continue
             chosen.add(candidate.hpo_id)
-            filled += 1
             negatives.append(
                 CasePhenotype(
                     hpo_id=candidate.hpo_id,
@@ -662,6 +925,19 @@ def _sample_negatives(
                     reason=candidate.reason,
                 )
             )
+            return True
+        return False
+
+    for source in NEGATIVE_SOURCES:
+        for _ in range(slots[source]):
+            if not fill(source):
+                break
+    if config.negatives.unfilled_slots == "redistribute":
+        while len(negatives) < count:
+            live = [(source, weight) for source, weight in weighted_sources if pools[source]]
+            if not live:
+                break
+            fill(_weighted_choice(live, rng))
     return negatives
 
 
@@ -686,7 +962,7 @@ def _sample_noise(
         term
         for term in noise_vocabulary
         if term.weight > 0.0
-        and term.hpo_id not in model.profile_ids
+        and term.hpo_id not in model.disease_term_ids
         and term.hpo_id not in present_ids
         and not negated.related(term.hpo_id)
         and sex_terms.allowed(term.hpo_id, None, patient.sex)

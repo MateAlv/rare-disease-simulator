@@ -1,0 +1,111 @@
+{
+  "genes": {
+    "GENEA": {
+      "symbol": "GENEA",
+      "v3_symbol": "GENEA",
+      "simulable_entities": 2,
+      "entities": [
+        {
+          "entity": "OMIM:100001",
+          "ids": ["OMIM:100001"],
+          "profile_ids": ["OMIM:100001"],
+          "inheritance": ["HP:0000007"],
+          "inheritance_basis": "hpoa",
+          "simulable": true,
+          "sim_weight": 0.8
+        },
+        {
+          "entity": "OMIM:100006",
+          "ids": ["OMIM:100006"],
+          "profile_ids": ["OMIM:100006"],
+          "inheritance": [],
+          "inheritance_basis": null,
+          "simulable": true,
+          "sim_weight": 0.2
+        },
+        {
+          "entity": "OMIM:100009",
+          "ids": ["OMIM:100009"],
+          "profile_ids": [],
+          "inheritance": [],
+          "inheritance_basis": null,
+          "simulable": false,
+          "sim_weight": 0.0
+        }
+      ]
+    },
+    "GENEB": {
+      "symbol": "GENEB",
+      "v3_symbol": "GENEB",
+      "simulable_entities": 1,
+      "entities": [
+        {
+          "entity": "OMIM:100002",
+          "ids": ["OMIM:100002"],
+          "profile_ids": ["OMIM:100002"],
+          "inheritance": ["HP:0001419"],
+          "inheritance_basis": "hpoa",
+          "simulable": true,
+          "sim_weight": 1.0
+        }
+      ]
+    },
+    "GENEC": {
+      "symbol": "GENEC",
+      "v3_symbol": "OLDC",
+      "simulable_entities": 1,
+      "entities": [
+        {
+          "entity": "OMIM:100008",
+          "ids": ["OMIM:100008", "ORPHA:3001"],
+          "profile_ids": ["OMIM:100008", "ORPHA:3001"],
+          "inheritance": ["HP:0000006"],
+          "inheritance_basis": "clingen",
+          "simulable": true,
+          "sim_weight": 1.0
+        }
+      ]
+    },
+    "GENEZ": {
+      "symbol": "GENEZ",
+      "v3_symbol": "GENEZ",
+      "simulable_entities": 0,
+      "entities": [
+        {
+          "entity": "OMIM:100010",
+          "ids": ["OMIM:100010"],
+          "profile_ids": [],
+          "inheritance": [],
+          "inheritance_basis": null,
+          "simulable": false,
+          "sim_weight": 0.0
+        }
+      ]
+    },
+    "GENEM": {
+      "symbol": "GENEM",
+      "v3_symbol": "GENEM",
+      "simulable_entities": 1,
+      "entities": [
+        {
+          "entity": "OMIM:199999",
+          "ids": ["OMIM:199999"],
+          "profile_ids": ["OMIM:199999"],
+          "inheritance": [],
+          "inheritance_basis": null,
+          "simulable": true,
+          "sim_weight": 1.0
+        }
+      ]
+    }
+  },
+  "vocabulary": {
+    "GENEA": "GENEA",
+    "GENEB": "GENEB",
+    "OLDC": "GENEC",
+    "GENEZ": "GENEZ",
+    "GENEM": "GENEM",
+    "GENEQ": "GENEQ",
+    "GENEU": null
+  }
+}

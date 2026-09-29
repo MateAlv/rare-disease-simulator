@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -21,17 +22,41 @@ from rare_disease_simulator.config import (
     load_config,
 )
 from rare_disease_simulator.data_sources.fetch import DiseaseQuery, fetch_disease_sources
+from rare_disease_simulator.data_sources.gene_profiles import (
+    GenePlan,
+    plan_genes,
+    read_gene_profiles,
+    read_gnn_genes,
+)
 from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import download_hpo_release
 from rare_disease_simulator.data_sources.http_client import HttpClient
 from rare_disease_simulator.exports.graphens import write_graphens_json
 from rare_disease_simulator.exports.jsonl import iter_model_jsonl, read_model_jsonl, write_jsonl
+from rare_disease_simulator.exports.training import (
+    EXPORT_FORMAT,
+    RECORD_FIELDS,
+    SPLIT_RULE,
+    ExportError,
+    card_path_for,
+    dataset_counts,
+    encode_dataset,
+    parse_split,
+    sort_records,
+    training_record,
+)
 from rare_disease_simulator.profiles.builder import (
     build_profiles_from_fixtures,
     write_profiles_jsonl,
 )
 from rare_disease_simulator.profiles.hpoa_builder import HpoaBuildInputs, build_profiles_from_hpoa
 from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.calibration import (
+    CalibrationError,
+    apply_calibration,
+    format_calibration_keys,
+    load_calibration,
+)
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
@@ -42,8 +67,10 @@ from rare_disease_simulator.simulation.simulator import (
     config_hash,
     primary_gene,
     simulate_cases,
+    simulate_gene_cases,
 )
 from rare_disease_simulator.validation.cases import format_report, validate_cases
+from rare_disease_simulator.validation.dataset import format_dataset_report, validate_dataset
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -274,6 +301,23 @@ def build_profiles(
             dir_okay=False,
         ),
     ] = None,
+    gene_profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--gene-profiles",
+            help="Gene profiles (genes-v1); also build diseases their simulable entities "
+            "list that genes_to_disease does not link to a gene.",
+            dir_okay=False,
+        ),
+    ] = None,
+    drop_annotations: Annotated[
+        Path | None,
+        typer.Option(
+            "--drop-annotations",
+            help="TSV (disease_id, hpo_id) of positive annotations to hold out of the profiles.",
+            dir_okay=False,
+        ),
+    ] = None,
     summary: Annotated[
         Path | None,
         typer.Option(
@@ -328,6 +372,8 @@ def build_profiles(
             exclude_pmids=_optional_file(
                 exclude_pmids or sources.exclude_pmids_path, "PMID mask"
             ),
+            gene_profiles=_optional_file(gene_profiles, "gene profiles"),
+            drop_annotations=_optional_file(drop_annotations, "annotation holdout"),
         )
         _build_profiles_from_hpoa(inputs, output or config.exports.profiles_path, summary)
         return
@@ -402,6 +448,14 @@ def _build_profiles_from_hpoa(
             f"{masking['diseases_affected']} disease(s); "
             f"{masking['diseases_dropped_zero_positive']} disease(s) left without phenotypes."
         )
+    holdout = result.summary["annotation_holdout"]
+    if holdout["enabled"]:
+        typer.echo(
+            f"Held out {holdout['pairs_dropped']} of {holdout['pairs_listed']} listed "
+            f"annotation(s) ({holdout['rows_dropped']} row(s)) across "
+            f"{holdout['diseases_affected']} disease(s); "
+            f"{holdout['diseases_dropped_zero_positive']} disease(s) left without phenotypes."
+        )
     typer.echo(f"Build summary: {summary_path}")
 
 
@@ -440,7 +494,7 @@ def simulate(
         Path | None,
         typer.Option(
             "--noise-vocabulary",
-            help="TSV with hpo_id and optional label columns of nonspecific noise terms.",
+            help="TSV with hpo_id and optional label and weight columns of noise terms.",
             dir_okay=False,
         ),
     ] = None,
@@ -472,6 +526,45 @@ def simulate(
         int | None,
         typer.Option("--cases-per-disease", min=1, help="Override cases per disease/difficulty."),
     ] = None,
+    genes: Annotated[
+        str | None,
+        typer.Option(
+            "--genes",
+            help="Gene-first mode: 'all' GNN genes, a comma-separated list of v3 symbols, "
+            "or a file with one symbol per line.",
+        ),
+    ] = None,
+    gene_profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--gene-profiles",
+            help="Gene profiles (genes-v1 genes.json.gz); implies gene-first mode "
+            "(default: configured path).",
+            dir_okay=False,
+        ),
+    ] = None,
+    gnn_genes: Annotated[
+        Path | None,
+        typer.Option(
+            "--gnn-genes",
+            help="GNN gene vocabulary (JSON list; its order is the class index).",
+            dir_okay=False,
+        ),
+    ] = None,
+    cases_per_gene: Annotated[
+        int | None,
+        typer.Option(
+            "--cases-per-gene", min=1, help="Gene-first mode: cases per gene and difficulty."
+        ),
+    ] = None,
+    calibration: Annotated[
+        Path | None,
+        typer.Option(
+            "--calibration",
+            help="JSON of dotted config paths to override (see calibration-keys).",
+            dir_okay=False,
+        ),
+    ] = None,
     difficulty: Annotated[
         list[str] | None,
         typer.Option("--difficulty", help="Override the difficulties (repeatable)."),
@@ -486,17 +579,36 @@ def simulate(
         ),
     ] = None,
 ) -> None:
-    """Simulate synthetic patient cases from validated profiles."""
+    """Simulate synthetic patient cases from validated profiles.
+
+    Disease-first by default; with --genes, --gene-profiles or --cases-per-gene,
+    one set of cases per GNN gene, labelled with the gene's class index.
+    """
 
     config = _config_from_context(ctx)
     profiles_path = profiles or config.exports.profiles_path
     if not profiles_path.exists():
         raise typer.BadParameter(f"profiles file not found: {profiles_path}")
     started = time.perf_counter()
+    gene_first = genes is not None or gene_profiles is not None or cases_per_gene is not None
+    if gene_first:
+        clashing = [
+            name
+            for name, value in (
+                ("--labels", labels),
+                ("--disease-ids", disease_ids),
+                ("--sample-diseases", sample_diseases),
+                ("--cases-per-disease", cases_per_disease),
+            )
+            if value is not None
+        ]
+        if clashing:
+            raise typer.BadParameter(f"gene-first mode does not take {', '.join(clashing)}")
 
     overrides: dict[str, object] = {}
-    if cases_per_disease is not None:
-        overrides["cases_per_disease_per_difficulty"] = cases_per_disease
+    per_target = cases_per_gene if gene_first else cases_per_disease
+    if per_target is not None:
+        overrides["cases_per_disease_per_difficulty"] = per_target
     if difficulty:
         overrides["difficulties"] = difficulty
     if seed is not None:
@@ -508,6 +620,18 @@ def simulate(
     except ValidationError as exc:
         raise typer.BadParameter(f"invalid simulation override: {exc}") from exc
 
+    calibration_data = None
+    if calibration is not None:
+        try:
+            calibration_data = load_calibration(_required_file(calibration, "calibration"))
+            sim_config = apply_calibration(sim_config, calibration_data.overrides)
+        except CalibrationError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        if calibration_data.noise_vocabulary is not None and noise_vocabulary is not None:
+            raise typer.BadParameter(
+                "the calibration file sets noise.vocabulary_path; drop --noise-vocabulary"
+            )
+
     hpo_path = hpo_json or config.sources.hpo_json_path
     if hpo_json is not None:
         _required_file(hpo_json, "hp.json")
@@ -517,23 +641,13 @@ def simulate(
             "No hp.json found; simulating without ontology generalization, sex-specific "
             "anchors or ancestor/descendant checks on negatives."
         )
-    noise_path = _optional_file(noise_vocabulary, "noise vocabulary")
+    noise_path = _optional_file(noise_vocabulary, "noise vocabulary") or (
+        calibration_data.noise_vocabulary if calibration_data else None
+    )
     noise_terms = load_noise_vocabulary(noise_path, ontology) if noise_path else None
     label_maps = load_label_maps(_required_file(labels, "labels")) if labels else None
 
     profile_records = read_model_jsonl(profiles_path, DiseaseProfile)
-    targets = profile_records
-    strata: dict[str, int] | None = None
-    if disease_ids is not None:
-        wanted = {
-            line.strip()
-            for line in _required_file(disease_ids, "disease ids").read_text("utf-8").splitlines()
-            if line.strip() and not line.startswith("#")
-        }
-        targets = [profile for profile in targets if profile.disease_id in wanted]
-    if sample_diseases is not None:
-        targets, strata = sample_diseases_by_stratum(targets, sample_diseases, sim_config.seed)
-
     confounders = ConfounderIndex(
         profile_records,
         ontology,
@@ -542,36 +656,68 @@ def simulate(
         unknown_frequency=sim_config.frequency.unknown_frequency,
     )
     sex_terms = SexSpecificTerms(ontology, sim_config.sex)
-    inputs = {
+    inputs: dict[str, dict[str, object] | None] = {
         "profiles": _input_record(profiles_path),
         "hp_json": _input_record(hpo_path, ontology.version) if ontology else None,
         "noise_vocabulary": _input_record(noise_path) if noise_path else None,
         "labels": _input_record(labels) if labels else None,
         "disease_ids": _input_record(disease_ids) if disease_ids else None,
+        "calibration": _input_record(calibration) if calibration else None,
     }
+
+    plan = None
+    targets = profile_records
+    strata: dict[str, int] | None = None
+    if gene_first:
+        plan, gene_inputs = _gene_plan(config, gene_profiles, gnn_genes, genes, profile_records)
+        inputs.update(gene_inputs)
+    else:
+        if disease_ids is not None:
+            wanted = {
+                line.strip()
+                for line in _required_file(disease_ids, "disease ids")
+                .read_text("utf-8")
+                .splitlines()
+                if line.strip() and not line.startswith("#")
+            }
+            targets = [profile for profile in targets if profile.disease_id in wanted]
+        if sample_diseases is not None:
+            targets, strata = sample_diseases_by_stratum(targets, sample_diseases, sim_config.seed)
+
     git = git_revision()
     source_versions = _source_versions(profile_records, inputs, git)
-
-    cases: list[SyntheticCase] = []
-    for profile in targets:
-        cases.extend(
-            simulate_cases(
+    options = {
+        "ontology": ontology,
+        "noise_vocabulary": noise_terms,
+        "confounders": confounders,
+        "sex_terms": sex_terms,
+        "source_versions": source_versions,
+    }
+    if plan is not None:
+        profile_map = {profile.disease_id: profile for profile in profile_records}
+        cases: Iterable[SyntheticCase] = (
+            case
+            for target in plan.targets
+            for case in simulate_gene_cases(target, profile_map, sim_config, **options)
+        )
+    else:
+        cases = (
+            case
+            for profile in targets
+            for case in simulate_cases(
                 profile,
                 sim_config,
-                ontology=ontology,
-                noise_vocabulary=noise_terms,
-                confounders=confounders,
-                sex_terms=sex_terms,
                 gene_label=label_maps.genes.get(primary_gene(profile)) if label_maps else None,
                 disease_label=label_maps.diseases.get(profile.disease_id) if label_maps else None,
-                source_versions=source_versions,
+                **options,
             )
         )
 
     output_path = output or config.exports.rich_cases_path
     written = write_jsonl(output_path, cases)
-    run_summary = {
+    run_summary: dict[str, object] = {
         "simulate": {
+            "mode": "gene_first" if gene_first else "disease_first",
             "simulator_version": SIMULATOR_VERSION,
             "package_version": __version__,
             "simulator_git": git,
@@ -579,13 +725,16 @@ def simulate(
             "wall_time_seconds": round(time.perf_counter() - started, 2),
         },
         "inputs": {key: value for key, value in inputs.items() if value is not None},
+        "profile_sources": _profile_sources(profile_records),
+        "calibration": calibration_data.record() if calibration_data else None,
         "config_hash": config_hash(sim_config),
         "config": sim_config.model_dump(mode="json"),
         "diseases": {
             "in_profiles": len(profile_records),
-            "simulated": len(targets),
+            "simulated": None if gene_first else len(targets),
             "strata": strata,
         },
+        "genes": {**plan.summary(), "requested": genes or "all"} if plan is not None else None,
         "output": {
             "cases_path": str(output_path),
             "cases_written": written,
@@ -596,13 +745,91 @@ def simulate(
     summary_path = summary or output_path.with_name(f"{output_path.stem}.summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(run_summary, indent=2) + "\n", encoding="utf-8")
-    typer.echo(
-        f"Simulated {written} case(s) from {len(targets)} of {len(profile_records)} profile(s) "
-        f"({sim_config.cases_per_disease_per_difficulty} per disease/difficulty, "
-        f"difficulties={','.join(sim_config.difficulties)}, seed={sim_config.seed})."
+    per = f"{sim_config.cases_per_disease_per_difficulty} per {'gene' if gene_first else 'disease'}"
+    run_shape = (
+        f"({per}/difficulty, difficulties={','.join(sim_config.difficulties)}, "
+        f"seed={sim_config.seed})."
     )
+    if plan is not None:
+        skipped = sum(len(symbols) for symbols in plan.skipped.values())
+        typer.echo(
+            f"Simulated {written} case(s) for {len(plan.targets)} gene(s); "
+            f"skipped {skipped} of {plan.vocabulary_size - 1} vocabulary gene(s) {run_shape}"
+        )
+    else:
+        typer.echo(
+            f"Simulated {written} case(s) from {len(targets)} of {len(profile_records)} "
+            f"profile(s) {run_shape}"
+        )
     typer.echo(f"Wrote rich cases to {output_path}")
     typer.echo(f"Run summary: {summary_path}")
+
+
+def _gene_plan(
+    config: AppConfig,
+    gene_profiles: Path | None,
+    gnn_genes: Path | None,
+    genes: str | None,
+    profile_records: list[DiseaseProfile],
+) -> tuple[GenePlan, dict[str, dict[str, object] | None]]:
+    sources = config.sources
+    profiles_path = gene_profiles or sources.gene_profiles_path
+    vocabulary_path = gnn_genes or sources.gnn_genes_path
+    if profiles_path is None:
+        raise typer.BadParameter("gene-first mode needs --gene-profiles")
+    if vocabulary_path is None:
+        raise typer.BadParameter("gene-first mode needs --gnn-genes")
+    _required_file(profiles_path, "gene profiles")
+    _required_file(vocabulary_path, "GNN gene vocabulary")
+    profiles_record = _input_record(profiles_path)
+    if gene_profiles is None and sources.gene_profiles_sha256:
+        if profiles_record["sha256"] != sources.gene_profiles_sha256:
+            raise typer.BadParameter(
+                f"gene profiles {profiles_path} have sha256 {profiles_record['sha256']}, "
+                f"not the pinned {sources.gene_profiles_sha256}"
+            )
+        profiles_record["sha256_verified_against"] = "sources.gene_profiles_sha256"
+    try:
+        gene_data = read_gene_profiles(profiles_path)
+        vocabulary = read_gnn_genes(vocabulary_path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    wanted = None
+    if genes is not None and genes != "all":
+        candidate = Path(genes)
+        entries = (
+            candidate.read_text("utf-8").splitlines() if candidate.is_file() else genes.split(",")
+        )
+        wanted = {
+            entry.strip() for entry in entries if entry.strip() and not entry.startswith("#")
+        }
+        unknown = sorted(wanted - set(vocabulary))
+        if unknown:
+            raise typer.BadParameter(f"not in the GNN vocabulary: {', '.join(unknown[:10])}")
+    plan = plan_genes(
+        gene_data, vocabulary, {profile.disease_id for profile in profile_records}, wanted
+    )
+    if not plan.targets:
+        raise typer.BadParameter("no requested gene has a simulable entity with a profile")
+    return plan, {
+        "gene_profiles": profiles_record,
+        "gnn_genes": _input_record(vocabulary_path),
+    }
+
+
+def _profile_sources(profiles: list[DiseaseProfile]) -> dict[str, dict[str, str | None]]:
+    """The sources the profiles were built from (incl. the held-out PMID mask)."""
+
+    sources: dict[str, dict[str, str | None]] = {}
+    for profile in profiles:
+        for item in profile.provenance:
+            source = item.source
+            sources.setdefault(
+                source.name,
+                {"file": source.url_or_file, "version": source.version, "sha256": source.sha256},
+            )
+    return dict(sorted(sources.items()))
 
 
 def _input_record(path: Path, version: str | None = None) -> dict[str, object]:
@@ -721,13 +948,46 @@ def validate(
             dir_okay=False,
         ),
     ] = None,
+    dataset: Annotated[
+        Path | None,
+        typer.Option(
+            "--dataset",
+            help="An export-training dataset (.jsonl.gz) to check against its card.",
+            dir_okay=False,
+        ),
+    ] = None,
+    card: Annotated[
+        Path | None,
+        typer.Option(
+            "--card", help="Dataset card (default: <dataset>.card.json).", dir_okay=False
+        ),
+    ] = None,
+    gnn_genes: Annotated[
+        Path | None,
+        typer.Option(
+            "--gnn-genes",
+            help="GNN gene vocabulary to check gene indices against (dataset mode).",
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
-    """Validate the config, or a simulated case set against its profiles and priors.
+    """Validate the config, a simulated case set, or an exported training dataset.
 
-    Exits with status 1 when any case invariant is violated.
+    Exits with status 1 when any case or dataset invariant is violated.
     """
 
     config = _config_from_context(ctx)
+    if dataset is not None:
+        if cases is not None:
+            raise typer.BadParameter("use either --cases or --dataset, not both")
+        hpo_path = hpo_json or config.sources.hpo_json_path
+        if hpo_json is not None:
+            _required_file(hpo_json, "hp.json")
+        ontology = HpoOntology.from_json(hpo_path) if hpo_path.is_file() else None
+        if ontology is None:
+            typer.echo("No hp.json found; excluded terms are only checked against true terms.")
+        _validate_dataset(dataset, card, gnn_genes, report, ontology)
+        return
     if cases is None:
         genes = ", ".join(disease.gene for disease in config.mvp.diseases)
         typer.echo(f"Config OK: {len(config.mvp.diseases)} MVP diseases ({genes})")
@@ -748,18 +1008,22 @@ def validate(
         if profiles is not None
         else None
     )
+    summary_path = run_summary or cases_path.with_name(f"{cases_path.stem}.summary.json")
+    sim_config, config_source = config.simulation, "app config"
+    run_data: dict | None = None
+    if run_summary is not None or summary_path.is_file():
+        run_data = json.loads(_required_file(summary_path, "run summary").read_text("utf-8"))
+        sim_config = SimulationConfig.model_validate(run_data["config"])
+        config_source = str(summary_path)
+    if noise_vocabulary is None and run_data is not None:
+        recorded = (run_data.get("inputs") or {}).get("noise_vocabulary")
+        if recorded and Path(recorded["path"]).is_file():
+            noise_vocabulary = Path(recorded["path"])
     noise_ids = (
         {term.hpo_id for term in load_noise_vocabulary(_required_file(noise_vocabulary, "noise"))}
         if noise_vocabulary is not None
         else None
     )
-
-    summary_path = run_summary or cases_path.with_name(f"{cases_path.stem}.summary.json")
-    sim_config, config_source = config.simulation, "app config"
-    if run_summary is not None or summary_path.is_file():
-        run_data = json.loads(_required_file(summary_path, "run summary").read_text("utf-8"))
-        sim_config = SimulationConfig.model_validate(run_data["config"])
-        config_source = str(summary_path)
 
     result = validate_cases(
         iter_model_jsonl(cases_path, SyntheticCase),
@@ -785,6 +1049,242 @@ def validate(
     typer.echo(f"Validation report: {report_path}")
     if result["violations"]["count"]:
         raise typer.Exit(code=1)
+
+
+def _validate_dataset(
+    dataset: Path,
+    card: Path | None,
+    gnn_genes: Path | None,
+    report: Path | None,
+    ontology: HpoOntology | None,
+) -> None:
+    dataset_path = _required_file(dataset, "dataset")
+    card_path = _required_file(card or card_path_for(dataset_path), "dataset card")
+    card_data = json.loads(card_path.read_text("utf-8"))
+    vocabulary = read_gnn_genes(_required_file(gnn_genes, "GNN genes")) if gnn_genes else None
+    result = {
+        "card": _input_record(card_path),
+        "gnn_genes": _input_record(gnn_genes) if gnn_genes else None,
+        "hp_json": {"version": ontology.version} if ontology else None,
+        **validate_dataset(dataset_path, card_data, vocabulary, ontology),
+    }
+    report_path = report or card_path.with_name(
+        card_path.name.removesuffix(".card.json") + ".dataset-validation.json"
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    typer.echo(format_dataset_report(result))
+    typer.echo(f"Validation report: {report_path}")
+    if result["violations"]["count"]:
+        raise typer.Exit(code=1)
+
+
+@app.command("export-training")
+def export_training(
+    ctx: typer.Context,
+    cases: Annotated[
+        Path, typer.Option("--cases", help="rich_cases.jsonl from simulate.", dir_okay=False)
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Dataset path (.jsonl.gz).", dir_okay=False),
+    ],
+    card: Annotated[
+        Path | None,
+        typer.Option(
+            "--card", help="Dataset card path (default: <output>.card.json).", dir_okay=False
+        ),
+    ] = None,
+    run_summary: Annotated[
+        Path | None,
+        typer.Option(
+            "--run-summary",
+            help="simulate's run summary (default: <cases stem>.summary.json).",
+            dir_okay=False,
+        ),
+    ] = None,
+    profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--profiles",
+            help="Profiles for validation (default: the run summary's).",
+            dir_okay=False,
+        ),
+    ] = None,
+    hpo_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--hpo-json", help="hp.json for validation (default: the run summary's).",
+            dir_okay=False,
+        ),
+    ] = None,
+    split: Annotated[
+        str,
+        typer.Option("--split", help="Sim train,val,test fractions, assigned by case seed."),
+    ] = "0.90,0.05,0.05",
+    allow_dirty: Annotated[
+        bool,
+        typer.Option(
+            "--allow-dirty",
+            help="Export even if this tree or the simulate run had uncommitted changes.",
+        ),
+    ] = False,
+) -> None:
+    """Write the export-v2 training dataset (gzip JSONL) and its dataset card.
+
+    The cases are validated first; any invariant violation stops the export.
+    """
+
+    _config_from_context(ctx)
+    started = time.perf_counter()
+    cases_path = _required_file(cases, "rich cases")
+    summary_path = _required_file(
+        run_summary or cases_path.with_name(f"{cases_path.stem}.summary.json"), "run summary"
+    )
+    run_data = json.loads(summary_path.read_text("utf-8"))
+    try:
+        fractions = parse_split(split)
+    except ExportError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    git = git_revision()
+    simulate_git = run_data["simulate"].get("simulator_git") or {}
+    dirty = bool(git.get("dirty")) or bool(simulate_git.get("dirty"))
+    if dirty and not allow_dirty:
+        raise typer.BadParameter(
+            "the simulator tree (now or at simulate time) had uncommitted changes; "
+            "commit them or pass --allow-dirty"
+        )
+
+    inputs = run_data.get("inputs", {})
+    profiles_path = _required_file(
+        profiles or Path(inputs["profiles"]["path"]), "profiles for validation"
+    )
+    hp_record = inputs.get("hp_json")
+    hpo_path = hpo_json or (Path(hp_record["path"]) if hp_record else None)
+    ontology = HpoOntology.from_json(_required_file(hpo_path, "hp.json")) if hpo_path else None
+    noise_record = inputs.get("noise_vocabulary")
+    noise_ids = (
+        {term.hpo_id for term in load_noise_vocabulary(Path(noise_record["path"]))}
+        if noise_record and Path(noise_record["path"]).is_file()
+        else None
+    )
+    sim_config = SimulationConfig.model_validate(run_data["config"])
+    profile_map = {
+        profile.disease_id: profile for profile in iter_model_jsonl(profiles_path, DiseaseProfile)
+    }
+    validation = validate_cases(
+        iter_model_jsonl(cases_path, SyntheticCase),
+        profiles=profile_map,
+        ontology=ontology,
+        config=sim_config,
+        noise_vocabulary=noise_ids,
+    )
+    if validation["violations"]["count"]:
+        typer.echo(format_report(validation))
+        typer.echo("Not exported: the cases violate invariants.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        records = sort_records(
+            training_record(case, fractions)
+            for case in iter_model_jsonl(cases_path, SyntheticCase)
+        )
+    except ExportError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    payload = encode_dataset(records)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(payload)
+
+    counts = dataset_counts(records)
+    hpo_version = (hp_record or {}).get("version") or "unknown"
+    card_data = {
+        "dataset_id": (
+            f"ds-sim{run_data['simulate']['simulator_version']}-hpo{hpo_version}"
+            f"-n{sim_config.cases_per_disease_per_difficulty}-s{sim_config.seed}"
+        ),
+        "format": EXPORT_FORMAT,
+        "record_fields": list(RECORD_FIELDS),
+        "file": {
+            "path": str(output),
+            "bytes": len(payload),
+            "sha256": sha256_file(output),
+            "records": len(records),
+        },
+        "split": {"rule": SPLIT_RULE, "fractions": dict(fractions)},
+        "counts": counts,
+        "genes": run_data.get("genes"),
+        "inputs": {
+            "cases": _input_record(cases_path),
+            "run_summary": _input_record(summary_path),
+            **inputs,
+            "heldout_pmids": (run_data.get("profile_sources") or {}).get(
+                "held-out reference mask"
+            ),
+            "profile_sources": run_data.get("profile_sources"),
+        },
+        "calibration": run_data.get("calibration"),
+        "simulator": {
+            "simulate": run_data["simulate"],
+            "export_git": git,
+            "allow_dirty": allow_dirty,
+            "dirty": dirty,
+        },
+        "config_hash": run_data["config_hash"],
+        "config": run_data["config"],
+        "validate": _validation_digest(validation),
+        "exported_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
+        "export_wall_time_seconds": round(time.perf_counter() - started, 2),
+    }
+    card_path = card or card_path_for(output)
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+    card_path.write_text(json.dumps(card_data, indent=2) + "\n", encoding="utf-8")
+    typer.echo(
+        f"Exported {len(records)} case(s) for {counts['genes']} gene(s) to {output} "
+        f"({len(payload)} bytes); splits "
+        + ", ".join(f"{name} {count}" for name, count in counts["by_split"].items())
+    )
+    typer.echo(f"Dataset card: {card_path}")
+
+
+def _validation_digest(report: dict) -> dict:
+    """The parts of the validate report a dataset card keeps."""
+
+    keys = (
+        "cases",
+        "diseases",
+        "genes",
+        "difficulties",
+        "config_matches_cases",
+        "phenotypes_per_case",
+        "positives",
+        "negatives",
+        "missingness",
+        "noise",
+        "sex",
+        "age",
+        "onset",
+        "violations",
+    )
+    digest = {key: report[key] for key in keys}
+    calibration = report.get("calibration")
+    if calibration is not None:
+        digest["calibration"] = {
+            view: {
+                "pairs": table["pairs"],
+                "calibration_error": table["calibration_error"],
+                "mean_abs_error_per_pair": table["mean_abs_error_per_pair"],
+            }
+            for view, table in calibration.items()
+        }
+    return digest
+
+
+@app.command("calibration-keys")
+def calibration_keys_command() -> None:
+    """Print the keys a --calibration file may set, with types and defaults."""
+
+    typer.echo(format_calibration_keys())
 
 
 def main() -> None:

@@ -66,9 +66,11 @@ class ConfounderIndex:
         self._vectors: dict[str, dict[str, float]] = {}
         postings: dict[str, list[str]] = defaultdict(list)
         for disease_id, terms in expanded.items():
+            # Sorted, so float sums (norms, cosines) do not depend on the
+            # process's string-hash order and near-ties rank the same every run.
             vector = {
                 hpo_id: self.information_content[hpo_id]
-                for hpo_id in terms
+                for hpo_id in sorted(terms)
                 if self.information_content[hpo_id] >= min_information_content
             }
             self._vectors[disease_id] = vector

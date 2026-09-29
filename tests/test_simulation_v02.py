@@ -17,6 +17,7 @@ from rare_disease_simulator.simulation.difficulty import DifficultyPreset
 from rare_disease_simulator.simulation.schema import SimulationConfig
 from rare_disease_simulator.simulation.simulator import (
     FORCED_REASON,
+    MERGED_REASON,
     NoiseTerm,
     sex_prior_key,
     simulate_cases,
@@ -182,7 +183,7 @@ def test_same_seed_and_config_give_identical_bytes(ontology, tmp_path: Path) -> 
 def test_metadata_carries_versions_and_no_timestamp(ontology) -> None:
     case = _simulate(ontology, source_versions={"profiles_sha256": "abc"})[0]
 
-    assert case.metadata.simulator_version == "0.2.0"
+    assert case.metadata.simulator_version == "0.3.0"
     assert case.metadata.source_versions == {"profiles_sha256": "abc"}
     assert case.metadata.generated_at is None
     assert case.metadata.config_hash.startswith("sha256:")
@@ -403,3 +404,39 @@ def test_default_negative_mix_is_dominated_by_the_disease_own_terms(ontology) ->
     origins = [p.simulated_origin for case in cases for p in case.negative_phenotypes]
 
     assert origins.count("negative_own_disease") > len(origins) / 2
+
+
+def test_terms_merged_by_generalization_stay_in_the_case(ontology) -> None:
+    profile = _profile(
+        "OMIM:7", [_phenotype("HP:0001250", 1.0), _phenotype("HP:0001251", 1.0)]
+    )
+    config = _config(
+        difficulties=["easy"],
+        cases_per_disease_per_difficulty=20,
+        presets={"easy": _preset(ontology_smoothing_rate=1.0)},
+    )
+
+    for case in simulate_cases(profile, config, ontology=ontology):
+        assert [p.hpo_id for p in case.positive_phenotypes] == ["HP:0000707"]
+        assert [(m.hpo_id, m.reason) for m in case.missing_phenotypes] == [
+            ("HP:0001251", MERGED_REASON)
+        ]
+
+
+def test_a_disease_only_one_sex_can_present_forces_that_sex(ontology) -> None:
+    ovarian = _profile(
+        "OMIM:6",
+        [_phenotype("HP:0000008", 0.3, onset="adult", onset_hpo_id="HP:0003581")],
+        age_of_onset=AgeOfOnset(category="infantile"),
+    )
+    config = _config(
+        difficulties=["easy"],
+        cases_per_disease_per_difficulty=30,
+        max_redraws=0,
+        sex={"p_male": {"unbiased": 1.0}},
+    )
+
+    cases = simulate_cases(ovarian, config, ontology=ontology)
+
+    assert {case.patient.sex for case in cases} == {"female"}
+    assert all(case.positive_phenotypes for case in cases)

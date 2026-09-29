@@ -41,6 +41,9 @@ class SourcePathsConfig(BaseModel):
     orphanet_ages_path: Path | None = Path("data/raw/orphadata/en_product9_ages.xml")
     omim_orpha_map_path: Path | None = None
     exclude_pmids_path: Path | None = None
+    gene_profiles_path: Path | None = None
+    gene_profiles_sha256: str | None = None
+    gnn_genes_path: Path | None = None
     negative_phenotype_annotation_path: Path = Path(
         "data/raw/hpo/negative_phenotype_annotation.tab"
     )
