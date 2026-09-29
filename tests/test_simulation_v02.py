@@ -17,6 +17,7 @@ from rare_disease_simulator.simulation.difficulty import DifficultyPreset
 from rare_disease_simulator.simulation.schema import SimulationConfig
 from rare_disease_simulator.simulation.simulator import (
     FORCED_REASON,
+    MERGED_REASON,
     NoiseTerm,
     sex_prior_key,
     simulate_cases,
@@ -403,3 +404,20 @@ def test_default_negative_mix_is_dominated_by_the_disease_own_terms(ontology) ->
     origins = [p.simulated_origin for case in cases for p in case.negative_phenotypes]
 
     assert origins.count("negative_own_disease") > len(origins) / 2
+
+
+def test_terms_merged_by_generalization_stay_in_the_case(ontology) -> None:
+    profile = _profile(
+        "OMIM:7", [_phenotype("HP:0001250", 1.0), _phenotype("HP:0001251", 1.0)]
+    )
+    config = _config(
+        difficulties=["easy"],
+        cases_per_disease_per_difficulty=20,
+        presets={"easy": _preset(ontology_smoothing_rate=1.0)},
+    )
+
+    for case in simulate_cases(profile, config, ontology=ontology):
+        assert [p.hpo_id for p in case.positive_phenotypes] == ["HP:0000707"]
+        assert [(m.hpo_id, m.reason) for m in case.missing_phenotypes] == [
+            ("HP:0001251", MERGED_REASON)
+        ]

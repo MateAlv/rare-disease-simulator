@@ -16,7 +16,9 @@ The generative model for one case (``docs/README.md`` documents every knob):
    present with probability ``p``.
 3. **Observation.** The difficulty preset decides which present terms are
    recorded (the rest become ``missing``/``unknown``) and which are generalized
-   to a parent term. Cases with no recorded term are redrawn; after
+   to a parent term. A term whose generalization is already recorded becomes
+   ``missing`` (``reason: recorded_as_generalized``), so every truly present
+   term appears in the case. Cases with no recorded term are redrawn; after
    ``max_redraws`` the most probable eligible term is forced in.
 4. **Negatives.** 0..k "asked and absent" terms from three sources: the
    disease's own terms the patient lacks (weighted by frequency), hallmark
@@ -82,6 +84,7 @@ NEGATIVE_ORIGINS: dict[NegativeSource, str] = {
     "not_annotation": "negative_not_annotation",
 }
 FORCED_REASON = "forced_min_one"
+MERGED_REASON = "recorded_as_generalized"
 
 _T = TypeVar("_T")
 
@@ -461,6 +464,14 @@ def _observe(
         if rng.random() < observe_rate:
             hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng)
             if hpo_id in observed_ids:
+                # The record already shows this term, so the specific one stays
+                # unrecorded; keeping it here keeps the case's truth complete.
+                if phenotype.hpo_id not in observed_ids:
+                    observation.missing.append(
+                        _unobserved(
+                            phenotype, probability, status="missing", reason=MERGED_REASON
+                        )
+                    )
                 continue
             observed_ids.add(hpo_id)
             observation.present_ids.add(hpo_id)
