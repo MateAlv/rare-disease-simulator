@@ -622,39 +622,46 @@ def _sample_negatives(
         "confounder": admissible(model.confounder_terms),
         "not_annotation": admissible(model.not_terms),
     }
-    source_weights = config.negatives.source_weights
+    weighted_sources = [
+        (source, config.negatives.source_weights[source])
+        for source in NEGATIVE_SOURCES
+        if config.negatives.source_weights[source] > 0.0
+    ]
+    if not weighted_sources:
+        return []
+    # Slots go to sources before any candidate is drawn, and a slot its source
+    # cannot fill stays empty, so the realized mix follows the configured weights.
+    slots = {source: 0 for source in NEGATIVE_SOURCES}
+    for _ in range(count):
+        slots[_weighted_choice(weighted_sources, rng)] += 1
+
     present = _RelatedTerms(ontology, present_ids)
     chosen = _RelatedTerms(ontology)
     negatives: list[CasePhenotype] = []
-    while len(negatives) < count:
-        sources = [
-            (source, source_weights[source])
-            for source in NEGATIVE_SOURCES
-            if pools[source] and source_weights[source] > 0.0
-        ]
-        if not sources:
-            break
-        source = _weighted_choice(sources, rng)
+    for source in NEGATIVE_SOURCES:
         pool = pools[source]
-        candidate = pool.pop(_weighted_index([item.weight for item in pool], rng))
-        if present.related(candidate.hpo_id) or chosen.related(candidate.hpo_id):
-            continue
-        chosen.add(candidate.hpo_id)
-        negatives.append(
-            CasePhenotype(
-                hpo_id=candidate.hpo_id,
-                label=candidate.label,
-                status="negative",
-                observed=True,
-                source_probability=(
-                    round(candidate.source_probability, 4)
-                    if candidate.source_probability is not None
-                    else None
-                ),
-                simulated_origin=NEGATIVE_ORIGINS[source],
-                reason=candidate.reason,
+        filled = 0
+        while pool and filled < slots[source]:
+            candidate = pool.pop(_weighted_index([item.weight for item in pool], rng))
+            if present.related(candidate.hpo_id) or chosen.related(candidate.hpo_id):
+                continue
+            chosen.add(candidate.hpo_id)
+            filled += 1
+            negatives.append(
+                CasePhenotype(
+                    hpo_id=candidate.hpo_id,
+                    label=candidate.label,
+                    status="negative",
+                    observed=True,
+                    source_probability=(
+                        round(candidate.source_probability, 4)
+                        if candidate.source_probability is not None
+                        else None
+                    ),
+                    simulated_origin=NEGATIVE_ORIGINS[source],
+                    reason=candidate.reason,
+                )
             )
-        )
     return negatives
 
 
