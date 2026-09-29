@@ -45,6 +45,7 @@ from rare_disease_simulator.profiles.frequency import (
     estimate_frequency,
     parse_frequencies,
 )
+from rare_disease_simulator.profiles.inheritance import derive_sex_bias
 from rare_disease_simulator.profiles.schema import (
     AgeOfOnset,
     DiseaseGene,
@@ -59,13 +60,11 @@ from rare_disease_simulator.profiles.schema import (
     ProgressionPattern,
     Provenance,
     SexBias,
-    SexBiasValue,
     SourceReference,
 )
 
 ONSET_ROOT = "HP:0003674"
 MODE_OF_INHERITANCE_ROOT = "HP:0000005"
-MENDELIAN_INHERITANCE = "HP:0034345"
 EXCLUDED_FREQUENCY = "HP:0040285"
 
 # Checked in order; the first anchor the term is (a descendant of) wins, so the
@@ -118,10 +117,6 @@ ASSOCIATION_TYPES: dict[str, GeneAssociationType] = {
     "POLYGENIC": "susceptibility",
 }
 
-AUTOSOMAL_MODES = ("HP:0000006", "HP:0000007", "HP:0032113")
-MALE_ONLY_MODES = ("HP:0001419", "HP:0001450")
-MALE_LIMITED = "HP:0001475"
-FEMALE_LIMITED = "HP:0034344"
 
 SEX_RESTRICTIONS = {"MALE": "male", "FEMALE": "female"}
 
@@ -557,33 +552,9 @@ def _progression(progression_ids: Iterable[str], ontology: HpoOntology) -> Progr
 def _sex_bias(
     inheritance: Sequence[str], ontology: HpoOntology, source: SourceReference
 ) -> SexBias | None:
-    """Derive a sex bias from inheritance only where the genetics imply it.
+    """Derive a sex bias from inheritance only where the genetics imply it."""
 
-    Male-/female-limited expression -> that sex. All Mendelian modes X-linked
-    recessive or Y-linked -> male. All Mendelian modes autosomal -> none. Any
-    other combination (X-linked dominant or unspecified, mitochondrial, mixed
-    modes) is left unset: the inheritance alone does not determine it.
-    """
-
-    def any_is_a(hpo_id: str, anchors: Iterable[str]) -> bool:
-        return any(ontology.is_a(hpo_id, anchor) for anchor in anchors)
-
-    male_limited = [hpo_id for hpo_id in inheritance if ontology.is_a(hpo_id, MALE_LIMITED)]
-    female_limited = [hpo_id for hpo_id in inheritance if ontology.is_a(hpo_id, FEMALE_LIMITED)]
-    modes = [hpo_id for hpo_id in inheritance if ontology.is_a(hpo_id, MENDELIAN_INHERITANCE)]
-
-    value: SexBiasValue | None = None
-    basis: list[str] = []
-    if male_limited and not female_limited:
-        value, basis = "male", male_limited
-    elif female_limited and not male_limited:
-        value, basis = "female", female_limited
-    elif male_limited or female_limited:
-        value = None
-    elif modes and all(any_is_a(hpo_id, MALE_ONLY_MODES) for hpo_id in modes):
-        value, basis = "male", modes
-    elif modes and all(any_is_a(hpo_id, AUTOSOMAL_MODES) for hpo_id in modes):
-        value, basis = "none", modes
+    value, basis = derive_sex_bias(inheritance, ontology)
     if value is None:
         return None
     evidence = "derived from inheritance: " + "; ".join(
