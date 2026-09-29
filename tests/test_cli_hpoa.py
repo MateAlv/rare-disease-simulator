@@ -203,3 +203,24 @@ def test_simulate_samples_diseases_records_provenance_and_is_byte_stable(tmp_pat
     assert summary["config_hash"] == cases[0].metadata.config_hash
     assert summary["output"]["sha256"] == sha256_file(first)
     assert set(summary["inputs"]) == {"profiles", "hp_json", "noise_vocabulary"}
+
+
+def test_build_profiles_adds_diseases_only_gene_profiles_link(tmp_path: Path) -> None:
+    plain, linked = tmp_path / "plain.jsonl", tmp_path / "linked.jsonl"
+    mask = ("--exclude-pmids", str(FIXTURES / "heldout_pmids.txt"))
+    assert _build(plain, *mask).exit_code == 0
+    result = _build(linked, *mask, "--gene-profiles", str(FIXTURES / "gene_profiles.json"))
+
+    assert result.exit_code == 0, result.output
+    plain_ids = {p.disease_id for p in read_model_jsonl(plain, DiseaseProfile)}
+    linked_profiles = {p.disease_id: p for p in read_model_jsonl(linked, DiseaseProfile)}
+    assert set(linked_profiles) - plain_ids == {"OMIM:100006"}
+    added = linked_profiles["OMIM:100006"]
+    assert [(g.symbol, g.association_type) for g in added.genes] == [("GENEA", "unknown")]
+    assert added.provenance[-1].source.name == "gene profiles"
+    summary = json.loads((tmp_path / "linked.summary.json").read_text("utf-8"))
+    assert summary["diseases"]["built_from_gene_profiles_links"] == 1
+    assert summary["inputs"]["gene_profiles"]["sha256"] == sha256_file(
+        FIXTURES / "gene_profiles.json"
+    )
+

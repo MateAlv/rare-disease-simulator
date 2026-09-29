@@ -274,6 +274,15 @@ def build_profiles(
             dir_okay=False,
         ),
     ] = None,
+    gene_profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--gene-profiles",
+            help="Gene profiles (genes-v1); also build diseases their simulable entities "
+            "list that genes_to_disease does not link to a gene.",
+            dir_okay=False,
+        ),
+    ] = None,
     summary: Annotated[
         Path | None,
         typer.Option(
@@ -328,6 +337,7 @@ def build_profiles(
             exclude_pmids=_optional_file(
                 exclude_pmids or sources.exclude_pmids_path, "PMID mask"
             ),
+            gene_profiles=_optional_file(gene_profiles, "gene profiles"),
         )
         _build_profiles_from_hpoa(inputs, output or config.exports.profiles_path, summary)
         return

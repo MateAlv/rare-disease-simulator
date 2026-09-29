@@ -2,7 +2,8 @@
 
 This is the structured, LLM-free backbone: one profile per OMIM/ORPHA/DECIPHER
 disease in ``phenotype.hpoa`` that has at least one gene in
-``genes_to_disease.txt``. Mapping rules (see ``docs/README.md``):
+``genes_to_disease.txt`` (or, with gene profiles, that a simulable gene-profile
+entity lists; those diseases get the gene-profile genes). Mapping rules (see ``docs/README.md``):
 
 - aspect ``P`` rows become phenotypes, their frequency read per ADR-0007
   (``profiles/frequency.py``); only ``NOT`` rows and the ``Excluded`` frequency
@@ -26,6 +27,10 @@ from pathlib import Path
 from typing import Any
 
 from rare_disease_simulator.build_info import sha256_file
+from rare_disease_simulator.data_sources.gene_profiles import (
+    read_gene_profiles,
+    simulable_profile_links,
+)
 from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import (
     HpoaRow,
@@ -134,6 +139,7 @@ class HpoaBuildInputs:
     orphanet_ages: Path | None = None
     omim_orpha_map: Path | None = None
     exclude_pmids: Path | None = None
+    gene_profiles: Path | None = None
 
 
 @dataclass
@@ -152,6 +158,7 @@ class _SourceContext:
     orphanet: SourceReference | None
     alignments: SourceReference | None
     mask: SourceReference | None
+    gene_profiles: SourceReference | None = None
 
     def base_provenance(self) -> list[Provenance]:
         sources = [self.hpoa, self.genes, self.ontology]
@@ -193,6 +200,15 @@ def build_profiles_from_hpoa(
     mask = read_reference_mask(inputs.exclude_pmids) if inputs.exclude_pmids else frozenset()
     orphanet = read_orphanet_onsets(inputs.orphanet_ages) if inputs.orphanet_ages else None
     omim_orpha = read_omim_orpha_map(inputs.omim_orpha_map) if inputs.omim_orpha_map else None
+    links: dict[str, tuple[GeneDiseaseLink, ...]] = dict(genes.links)
+    added_links: set[str] = set()
+    if inputs.gene_profiles is not None:
+        for disease_id, symbols in simulable_profile_links(
+            read_gene_profiles(inputs.gene_profiles)
+        ).items():
+            if disease_id not in links:
+                links[disease_id] = tuple(_gene_profile_link(disease_id, s) for s in symbols)
+                added_links.add(disease_id)
 
     input_records = _input_records(inputs, ontology, hpoa_header, orphanet, omim_orpha)
     sources = _source_context(input_records)
@@ -209,11 +225,11 @@ def build_profiles_from_hpoa(
             positives_before_mask.add(row.disease_id)
         if mask and any(reference in mask for reference in row.references):
             stats.rows["masked"] += 1
-            if row.disease_id in genes.links:
+            if row.disease_id in links:
                 stats.rows["masked_gene_linked"] += 1
             stats.masked_diseases.add(row.disease_id)
             continue
-        if row.disease_id not in genes.links:
+        if row.disease_id not in links:
             stats.rows["disease_without_gene"] += 1
             continue
         rows_by_disease[row.disease_id].append(row)
@@ -224,14 +240,19 @@ def build_profiles_from_hpoa(
         1 for disease_id in genes.links if disease_id not in names
     )
 
+    if inputs.gene_profiles is not None:
+        stats.diseases["gene_profiles_links_added"] = sum(
+            1 for disease_id in added_links if disease_id in names
+        )
+
     profiles: list[DiseaseProfile] = []
-    gene_linked = [disease_id for disease_id in names if disease_id in genes.links]
+    gene_linked = [disease_id for disease_id in names if disease_id in links]
     for disease_id in sorted(gene_linked, key=_disease_sort_key):
         profile = _build_profile(
             disease_id,
             names[disease_id],
             rows_by_disease.get(disease_id, []),
-            genes.links[disease_id],
+            links[disease_id],
             ontology=ontology,
             orphanet=orphanet,
             omim_orpha=omim_orpha,
@@ -243,6 +264,9 @@ def build_profiles_from_hpoa(
             if disease_id in positives_before_mask and disease_id in stats.masked_diseases:
                 stats.diseases["dropped_zero_positive_due_to_mask"] += 1
             continue
+        if disease_id in added_links and sources.gene_profiles is not None:
+            stats.diseases["built_from_gene_profiles_links"] += 1
+            profile.provenance.append(Provenance(source=sources.gene_profiles, field="genes"))
         profiles.append(profile)
         _record_profile_stats(profile, stats)
 
@@ -578,6 +602,18 @@ def _disease_gene(
     )
 
 
+def _gene_profile_link(disease_id: str, symbol: str) -> GeneDiseaseLink:
+    """A link known only from gene profiles (Orphanet or ClinGen, not HPO)."""
+
+    return GeneDiseaseLink(
+        disease_id=disease_id,
+        gene_symbol=symbol,
+        ncbi_gene_id="",
+        association_type="UNKNOWN",
+        source="gene_profiles",
+    )
+
+
 def _mapped_ids(disease_id: str, omim_orpha: OmimOrphaMap | None) -> MappedDiseaseIds:
     if disease_id.startswith("OMIM:"):
         orpha_ids = omim_orpha.omim_to_orpha.get(disease_id, ()) if omim_orpha else ()
@@ -618,6 +654,7 @@ def _input_records(
         ("orphanet_ages", inputs.orphanet_ages, orphanet.version if orphanet else None),
         ("omim_orpha_map", inputs.omim_orpha_map, omim_orpha.version if omim_orpha else None),
         ("exclude_pmids", inputs.exclude_pmids, None),
+        ("gene_profiles", inputs.gene_profiles, None),
     ]
     return {
         name: {
@@ -655,6 +692,7 @@ def _source_context(records: dict[str, dict[str, Any]]) -> _SourceContext:
         orphanet=reference("orphanet_ages", "Orphanet average age of onset", "CC-BY-4.0"),
         alignments=reference("omim_orpha_map", "Orphanet OMIM-ORPHA alignments", "CC-BY-4.0"),
         mask=reference("exclude_pmids", "held-out reference mask", None),
+        gene_profiles=reference("gene_profiles", "gene profiles", None),
     )
 
 
