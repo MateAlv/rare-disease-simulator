@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,12 @@ from rare_disease_simulator.simulation.calibration import (
     CalibrationError,
     apply_calibration,
     calibration_keys,
+    format_calibration_keys,
     load_calibration,
 )
 from rare_disease_simulator.simulation.schema import SimulationConfig
+
+README = Path(__file__).resolve().parents[1] / "docs" / "README.md"
 
 
 def _write(path: Path, data: dict) -> Path:
@@ -98,3 +102,11 @@ def test_load_rejects_non_objects(tmp_path: Path) -> None:
     with pytest.raises(CalibrationError, match="JSON object"):
         load_calibration(path)
 
+
+def test_readme_lists_exactly_the_generated_keys() -> None:
+    text = README.read_text(encoding="utf-8")
+    table = format_calibration_keys()
+
+    assert table in text
+    documented = set(re.findall(r"^\| `([^`]+)` \|", text, flags=re.MULTILINE))
+    assert {key.path for key in calibration_keys()} <= documented
