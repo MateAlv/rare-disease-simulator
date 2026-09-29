@@ -101,7 +101,7 @@ def test_gene_first_simulate_labels_cases_and_reports_skips(gene_run) -> None:
     assert summary["genes"]["skipped"]["unresolved_symbol"] == 2
     assert summary["genes"]["requested"] == "all"
     assert {"gene_profiles", "gnn_genes", "profiles"} <= set(summary["inputs"])
-    assert "held-out reference mask" in summary["profile_sources"]
+    assert {"held-out reference mask", "gene profiles"} <= set(summary["profile_sources"])
 
 
 def test_gene_first_rejects_disease_first_options(tmp_path: Path) -> None:

@@ -822,13 +822,13 @@ def _profile_sources(profiles: list[DiseaseProfile]) -> dict[str, dict[str, str 
     """The sources the profiles were built from (incl. the held-out PMID mask)."""
 
     sources: dict[str, dict[str, str | None]] = {}
-    for item in profiles[0].provenance if profiles else []:
-        source = item.source
-        sources[source.name] = {
-            "file": source.url_or_file,
-            "version": source.version,
-            "sha256": source.sha256,
-        }
+    for profile in profiles:
+        for item in profile.provenance:
+            source = item.source
+            sources.setdefault(
+                source.name,
+                {"file": source.url_or_file, "version": source.version, "sha256": source.sha256},
+            )
     return dict(sorted(sources.items()))
 
 
