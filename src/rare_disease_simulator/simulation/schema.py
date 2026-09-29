@@ -227,14 +227,26 @@ class ProgressionSettings(StrictBaseModel):
 
 
 class NegativeSettings(StrictBaseModel):
-    """Asked-and-absent terms; the per-case count mean lives in the difficulty preset."""
+    """Asked-and-absent terms; the per-case count mean lives in the difficulty preset.
 
-    max_per_case: int = Field(default=6, ge=0)
+    The count is Gamma-Poisson (negative binomial) with the preset mean, capped
+    at ``max_per_case``. Own-disease terms dominate the default mix because
+    real case reports mostly list the true syndrome's typical signs a patient
+    lacks (diagnostic.ar-training EXP-B-001, Addendum 1). The defaults are not
+    fitted to any cohort; calibrate them on R1-train only.
+    """
+
+    max_per_case: int = Field(default=15, ge=0)
+    count_dispersion: float | None = Field(
+        default=2.0,
+        gt=0.0,
+        description="Gamma shape of the count; smaller is more spread, None is plain Poisson.",
+    )
     source_weights: dict[NegativeSource, float] = Field(
         default_factory=lambda: {
-            "own_disease": 0.5,
-            "confounder": 0.35,
-            "not_annotation": 0.15,
+            "own_disease": 0.7,
+            "confounder": 0.2,
+            "not_annotation": 0.1,
         },
         description="Relative odds of each source per negative slot; 0 disables a source.",
     )

@@ -25,7 +25,7 @@ class DifficultyPreset(BaseModel):
     cardinal_observation_boost: float = Field(ge=0.0, le=1.0)
     missing_vs_unknown_split: float = Field(ge=0.0, le=1.0)
     negatives_mean: float = Field(
-        ge=0.0, description="Poisson mean of asked-and-absent terms per case."
+        ge=0.0, description="Mean number of asked-and-absent terms per case."
     )
     noise_mean: float = Field(ge=0.0, description="Poisson mean of noise terms per case.")
     ontology_smoothing_rate: float = Field(ge=0.0, le=1.0)
@@ -35,7 +35,7 @@ EASY = DifficultyPreset(
     positive_observation_rate=0.92,
     cardinal_observation_boost=0.08,
     missing_vs_unknown_split=0.8,
-    negatives_mean=3.0,
+    negatives_mean=10.0,
     noise_mean=0.0,
     ontology_smoothing_rate=0.0,
 )
@@ -44,7 +44,7 @@ MEDIUM = DifficultyPreset(
     positive_observation_rate=0.75,
     cardinal_observation_boost=0.1,
     missing_vs_unknown_split=0.6,
-    negatives_mean=2.0,
+    negatives_mean=7.0,
     noise_mean=1.0,
     ontology_smoothing_rate=0.15,
 )
@@ -53,7 +53,7 @@ HARD = DifficultyPreset(
     positive_observation_rate=0.55,
     cardinal_observation_boost=0.1,
     missing_vs_unknown_split=0.5,
-    negatives_mean=1.0,
+    negatives_mean=4.0,
     noise_mean=2.0,
     ontology_smoothing_rate=0.35,
 )

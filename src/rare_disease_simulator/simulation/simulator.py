@@ -588,7 +588,12 @@ def _sample_negatives(
     ontology: HpoOntology | None,
     sex_terms: SexSpecificTerms,
 ) -> list[CasePhenotype]:
-    count = min(_poisson(preset.negatives_mean, rng), config.negatives.max_per_case)
+    count = negative_count(
+        preset.negatives_mean,
+        config.negatives.count_dispersion,
+        config.negatives.max_per_case,
+        rng,
+    )
     if count == 0:
         return []
 
@@ -695,9 +700,22 @@ def _sample_noise(
     return noise
 
 
+def negative_count(
+    mean: float, dispersion: float | None, cap: int, rng: random.Random
+) -> int:
+    """Gamma-Poisson count with the given mean, capped at ``cap``."""
+
+    if mean <= 0.0 or cap <= 0:
+        return 0
+    rate = rng.gammavariate(dispersion, mean / dispersion) if dispersion else mean
+    return min(_poisson(rate, rng), cap)
+
+
 def _poisson(mean: float, rng: random.Random) -> int:
     if mean <= 0.0:
         return 0
+    if mean > 30.0:
+        return max(0, round(rng.gauss(mean, math.sqrt(mean))))
     limit = math.exp(-mean)
     count, product = 0, rng.random()
     while product > limit:

@@ -364,3 +364,38 @@ def test_negative_sources_can_be_disabled(ontology) -> None:
     }
 
     assert origins == {"negative_not_annotation"}
+
+
+def test_negative_count_is_overdispersed_and_capped() -> None:
+    import random
+
+    from rare_disease_simulator.simulation.simulator import negative_count
+
+    rng = random.Random(3)
+    counts = [negative_count(7.0, 2.0, 15, rng) for _ in range(4000)]
+
+    assert max(counts) == 15
+    assert counts.count(0) > 100
+    assert sum(counts) / len(counts) == pytest.approx(6.5, abs=0.5)
+    assert negative_count(7.0, None, 0, rng) == 0
+
+
+def test_default_negative_mix_is_dominated_by_the_disease_own_terms(ontology) -> None:
+    rich = _profile(
+        "OMIM:8",
+        [
+            _phenotype(hpo_id, 0.3)
+            for hpo_id in TERMS
+            if not any(parents == (hpo_id,) for _, parents in TERMS.values())
+            and hpo_id != "HP:0000964"
+        ],
+        negative_phenotypes=[NegativePhenotypeAssociation(hpo_id="HP:0000964", label="Eczema")],
+    )
+    config = SimulationConfig(cases_per_disease_per_difficulty=100, difficulties=["easy"])
+    assert config.negatives.max_per_case == 15
+    index = ConfounderIndex([rich, CONFOUNDER, UNRELATED], ontology, min_information_content=0.0)
+
+    cases = simulate_cases(rich, config, ontology=ontology, confounders=index)
+    origins = [p.simulated_origin for case in cases for p in case.negative_phenotypes]
+
+    assert origins.count("negative_own_disease") > len(origins) / 2
