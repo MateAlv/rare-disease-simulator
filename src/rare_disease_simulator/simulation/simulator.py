@@ -677,6 +677,12 @@ def _observe(
 ) -> _Observation:
     observation = _Observation()
     observed_ids: set[str] = set()
+    # A generalized term must not be one the profile restricts to the other sex.
+    other_sex_terms = frozenset(
+        t.phenotype.hpo_id
+        for t in model.terms
+        if t.phenotype.sex_restriction is not None and t.phenotype.sex_restriction != patient.sex
+    )
     for index, term in enumerate(model.terms):
         if not patient.eligible[index] or rng.random() >= patient.probabilities[index]:
             continue
@@ -687,7 +693,7 @@ def _observe(
         if phenotype.diagnostic_role in CARDINAL_ROLES:
             observe_rate = min(1.0, observe_rate + preset.cardinal_observation_boost)
         if rng.random() < observe_rate:
-            hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng)
+            hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng, other_sex_terms)
             if hpo_id in observed_ids:
                 # The record already shows this term, so the specific one stays
                 # unrecorded; keeping it here keeps the case's truth complete.
@@ -783,6 +789,7 @@ def _maybe_generalize(
     preset: DifficultyPreset,
     ontology: HpoOntology | None,
     rng: random.Random,
+    forbidden: frozenset[str] = frozenset(),
 ) -> tuple[str, str]:
     if ontology is None or preset.ontology_smoothing_rate <= 0.0:
         return phenotype.hpo_id, phenotype.label
@@ -791,7 +798,7 @@ def _maybe_generalize(
     parents = [
         parent
         for parent in ontology.get_direct_parents(phenotype.hpo_id)
-        if ontology.is_phenotypic_abnormality(parent)
+        if ontology.is_phenotypic_abnormality(parent) and parent not in forbidden
     ]
     if not parents:
         return phenotype.hpo_id, phenotype.label
