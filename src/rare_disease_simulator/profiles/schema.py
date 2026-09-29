@@ -85,7 +85,11 @@ class DiseaseGene(StrictBaseModel):
 
 
 class ProbabilityRange(StrictBaseModel):
-    """Approximate probability range implied by a phenotype frequency category."""
+    """Plausible range of a phenotype frequency around its estimate.
+
+    Counts use the 95% Jeffreys interval, percentages span the reported values,
+    and HPO categories use the envelope of their HPO-defined ranges.
+    """
 
     lower: float = Field(ge=0.0, le=1.0)
     upper: float = Field(ge=0.0, le=1.0)
@@ -98,6 +102,12 @@ class PhenotypeAssociation(StrictBaseModel):
     label: str
     frequency: FrequencyCategory = "unknown"
     frequency_raw: str | None = None
+    frequency_estimate: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Point frequency per ADR-0007; None when the source gives no frequency.",
+    )
     probability_range: ProbabilityRange | None = None
     diagnostic_role: DiagnosticRole = "unknown"
     onset: OnsetCategory = "unknown"

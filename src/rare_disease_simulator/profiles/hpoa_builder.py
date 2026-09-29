@@ -4,8 +4,9 @@ This is the structured, LLM-free backbone: one profile per OMIM/ORPHA/DECIPHER
 disease in ``phenotype.hpoa`` that has at least one gene in
 ``genes_to_disease.txt``. Mapping rules (see ``docs/README.md``):
 
-- aspect ``P`` rows become phenotypes; ``NOT`` rows, the ``Excluded`` frequency
-  term and a pooled ``0/n`` frequency become negative phenotypes;
+- aspect ``P`` rows become phenotypes, their frequency read per ADR-0007
+  (``profiles/frequency.py``); only ``NOT`` rows and the ``Excluded`` frequency
+  term become negative phenotypes (a ``0/m`` count is a low frequency);
 - aspect ``I`` rows become gene inheritance and, where sound, a sex bias;
 - aspect ``C`` onset rows become the disease age of onset, with Orphanet average
   age of onset as fallback; ``C`` pace-of-progression rows set ``progression``;
@@ -27,9 +28,7 @@ from typing import Any
 from rare_disease_simulator.build_info import sha256_file
 from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import (
-    HPO_FREQUENCY_TERMS,
     HpoaRow,
-    frequency_category_for_probability,
     iter_hpoa_rows,
     read_hpoa_header,
     read_reference_mask,
@@ -41,11 +40,15 @@ from rare_disease_simulator.data_sources.orphanet_products import (
     read_omim_orpha_map,
     read_orphanet_onsets,
 )
+from rare_disease_simulator.profiles.frequency import (
+    FrequencyEstimate,
+    estimate_frequency,
+    parse_frequencies,
+)
 from rare_disease_simulator.profiles.schema import (
     AgeOfOnset,
     DiseaseGene,
     DiseaseProfile,
-    FrequencyCategory,
     GeneAssociationType,
     MappedDiseaseIds,
     NegativePhenotypeAssociation,
@@ -64,15 +67,6 @@ ONSET_ROOT = "HP:0003674"
 MODE_OF_INHERITANCE_ROOT = "HP:0000005"
 MENDELIAN_INHERITANCE = "HP:0034345"
 EXCLUDED_FREQUENCY = "HP:0040285"
-
-# HPO-defined ranges of the frequency sub-ontology terms.
-HPO_FREQUENCY_RANGES: dict[str, tuple[float, float]] = {
-    "HP:0040280": (1.0, 1.0),
-    "HP:0040281": (0.80, 0.99),
-    "HP:0040282": (0.30, 0.79),
-    "HP:0040283": (0.05, 0.29),
-    "HP:0040284": (0.01, 0.04),
-}
 
 # Checked in order; the first anchor the term is (a descendant of) wins, so the
 # specific pediatric anchors precede their parent "Pediatric onset".
@@ -131,8 +125,6 @@ FEMALE_LIMITED = "HP:0034344"
 
 SEX_RESTRICTIONS = {"MALE": "male", "FEMALE": "female"}
 
-_RATIO_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
-_PERCENT_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*%\s*$")
 _ID_NUMBER_RE = re.compile(r"(\d+)$")
 _ROUND_DIGITS = 4
 
@@ -180,6 +172,7 @@ class _Stats:
     diseases_by_prefix: Counter[str] = field(default_factory=Counter)
     phenotypes: Counter[str] = field(default_factory=Counter)
     frequency_categories: Counter[str] = field(default_factory=Counter)
+    frequency_basis: Counter[str] = field(default_factory=Counter)
     negatives: Counter[str] = field(default_factory=Counter)
     onset_sources: Counter[str] = field(default_factory=Counter)
     onset_categories: Counter[str] = field(default_factory=Counter)
@@ -326,14 +319,10 @@ def _build_profile(
         else:
             stats.rows[f"skipped_aspect_{row.aspect or 'blank'}"] += 1
 
-    phenotypes: list[PhenotypeAssociation] = []
-    for hpo_id in sorted(positive_rows):
-        phenotype = _merge_positive(hpo_id, positive_rows[hpo_id], ontology, counters, stats)
-        if phenotype is None:
-            negative_rows[hpo_id].extend(positive_rows[hpo_id])
-            negative_reasons[hpo_id].add("zero_frequency")
-            continue
-        phenotypes.append(phenotype)
+    phenotypes = [
+        _merge_positive(hpo_id, positive_rows[hpo_id], ontology, stats)
+        for hpo_id in sorted(positive_rows)
+    ]
 
     if not phenotypes:
         return None
@@ -392,23 +381,21 @@ def _merge_positive(
     hpo_id: str,
     rows: Sequence[HpoaRow],
     ontology: HpoOntology,
-    counters: Counter[str],
     stats: _Stats,
-) -> PhenotypeAssociation | None:
-    """Merge all positive rows of one (disease, term); None means pooled frequency 0."""
+) -> PhenotypeAssociation:
+    """Merge all positive rows of one (disease, term)."""
 
     frequency = _merge_frequency(rows, stats)
-    if frequency is not None and frequency[1] is not None and frequency[1].upper == 0.0:
-        return None
-    category, probability_range, raw = frequency or ("unknown", None, None)
-
     onset_category, onset_hpo_id = _merge_phenotype_onset(rows, ontology, stats)
     return PhenotypeAssociation(
         hpo_id=hpo_id,
         label=ontology.get_label(hpo_id) or hpo_id,
-        frequency=category,
-        frequency_raw=raw,
-        probability_range=probability_range,
+        frequency=frequency.category if frequency else "unknown",  # type: ignore[arg-type]
+        frequency_raw=frequency.raw if frequency else None,
+        frequency_estimate=frequency.estimate if frequency else None,
+        probability_range=(
+            ProbabilityRange(lower=frequency.lower, upper=frequency.upper) if frequency else None
+        ),
         onset=onset_category,
         onset_hpo_id=onset_hpo_id,
         sex_restriction=_merge_sex(rows, stats),  # type: ignore[arg-type]
@@ -416,66 +403,16 @@ def _merge_positive(
     )
 
 
-def _merge_frequency(
-    rows: Sequence[HpoaRow], stats: _Stats
-) -> tuple[FrequencyCategory, ProbabilityRange | None, str | None] | None:
-    """Combine the frequency of duplicate rows.
+def _merge_frequency(rows: Sequence[HpoaRow], stats: _Stats) -> FrequencyEstimate | None:
+    """Combine the frequency of duplicate rows per ADR-0007 (see ``profiles/frequency.py``)."""
 
-    Counted evidence wins: ``n/m`` rows are pooled (sum n / sum m); otherwise
-    percentages are averaged; otherwise the envelope of the HPO frequency term
-    ranges is used. Rows without a frequency never imply "always".
-    """
-
-    ratios: list[tuple[int, int]] = []
-    percents: list[float] = []
-    terms: list[str] = []
-    for row in rows:
-        value = row.frequency
-        if value is None:
-            continue
-        if value in HPO_FREQUENCY_RANGES:
-            terms.append(value)
-            continue
-        ratio = _RATIO_RE.match(value)
-        if ratio and int(ratio.group(2)) > 0:
-            ratios.append((int(ratio.group(1)), int(ratio.group(2))))
-            continue
-        percent = _PERCENT_RE.match(value)
-        if percent:
-            percents.append(min(float(percent.group(1)) / 100.0, 1.0))
-            continue
-        stats.rows["unparsed_frequency"] += 1
-
-    if ratios:
-        numerator = sum(n for n, _ in ratios)
-        denominator = sum(m for _, m in ratios)
-        probability = min(numerator / denominator, 1.0)
-        return _point_frequency(probability, f"{numerator}/{denominator}")
-    if percents:
-        probability = sum(percents) / len(percents)
-        return _point_frequency(probability, f"{_round(probability * 100):g}%")
-    if terms:
-        distinct = sorted(set(terms))
-        lower = min(HPO_FREQUENCY_RANGES[term][0] for term in distinct)
-        upper = max(HPO_FREQUENCY_RANGES[term][1] for term in distinct)
-        if len(distinct) == 1:
-            category = HPO_FREQUENCY_TERMS[distinct[0]]
-        else:
-            category = frequency_category_for_probability((lower + upper) / 2.0)
-        return (
-            category,  # type: ignore[return-value]
-            ProbabilityRange(lower=lower, upper=upper),
-            ";".join(distinct),
-        )
-    return None
-
-
-def _point_frequency(
-    probability: float, raw: str
-) -> tuple[FrequencyCategory, ProbabilityRange, str]:
-    value = _round(probability)
-    category = frequency_category_for_probability(value)
-    return category, ProbabilityRange(lower=value, upper=value), raw  # type: ignore[return-value]
+    parsed = parse_frequencies(row.frequency for row in rows)
+    if parsed.unparsed:
+        stats.rows["unparsed_frequency"] += parsed.unparsed
+    estimate = estimate_frequency(parsed)
+    if estimate is not None:
+        stats.frequency_basis[estimate.basis] += 1
+    return estimate
 
 
 def _merge_phenotype_onset(
@@ -808,6 +745,7 @@ def _summary(
             **dict(sorted(stats.phenotypes.items())),
             "unique_terms": len(stats.unique_terms),
             "by_frequency": dict(sorted(stats.frequency_categories.items())),
+            "by_frequency_basis": dict(sorted(stats.frequency_basis.items())),
         },
         "negatives": dict(sorted(stats.negatives.items())),
         "age_of_onset": {
