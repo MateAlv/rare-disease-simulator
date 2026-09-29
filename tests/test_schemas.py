@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from rare_disease_simulator.llm_extraction.schema import DiseaseProfilePatch
 from rare_disease_simulator.profiles.schema import DiseaseProfile
 from rare_disease_simulator.schema_export import core_json_schemas
@@ -57,3 +60,23 @@ def test_core_json_schema_export_contains_public_models() -> None:
     }
     assert schemas["DiseaseProfile"]["title"] == "DiseaseProfile"
     assert schemas["SyntheticCase"]["title"] == "SyntheticCase"
+
+
+def test_disease_profile_new_optional_fields_default_to_empty() -> None:
+    profile = read_disease_profile()
+
+    phenotype = profile.phenotypes[0]
+    assert phenotype.sex_restriction is None
+    assert phenotype.onset_hpo_id is None
+    assert profile.quality.counters == {}
+    assert profile.genes[0].ncbi_gene_id is None
+
+
+def test_phenotype_sex_restriction_accepts_only_male_or_female() -> None:
+    payload = read_disease_profile().model_dump(mode="json")
+    payload["phenotypes"][0]["sex_restriction"] = "female"
+    assert DiseaseProfile.model_validate(payload).phenotypes[0].sex_restriction == "female"
+
+    payload["phenotypes"][0]["sex_restriction"] = "none"
+    with pytest.raises(ValidationError):
+        DiseaseProfile.model_validate(payload)

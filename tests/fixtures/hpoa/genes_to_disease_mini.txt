@@ -1,0 +1,11 @@
+ncbi_gene_id	gene_symbol	association_type	disease_id	source
+NCBIGene:1	GENEA	MENDELIAN	OMIM:100001	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:2	GENEB	MENDELIAN	OMIM:100002	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:4	GENED	UNKNOWN	ORPHA:3001	http://www.orphadata.org/data/xml/en_product6.xml
+NCBIGene:3	GENEC	UNKNOWN	ORPHA:3001	http://www.orphadata.org/data/xml/en_product6.xml
+NCBIGene:3	GENEC	UNKNOWN	ORPHA:3001	http://www.orphadata.org/data/xml/en_product6.xml
+NCBIGene:5	GENEE	MENDELIAN	OMIM:100004	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:6	GENEF	POLYGENIC	OMIM:100005	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:7	-	MENDELIAN	OMIM:100007	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:8	GENEG	MENDELIAN	OMIM:100008	ftp://ftp.ncbi.nlm.nih.gov/gene/DATA/mim2gene_medgen
+NCBIGene:9	GENEH	UNKNOWN	ORPHA:3009	http://www.orphadata.org/data/xml/en_product6.xml

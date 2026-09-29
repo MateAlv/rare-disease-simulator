@@ -52,6 +52,7 @@ def evaluate_profile_quality(
         profile_confidence=profile_confidence,
         warnings=_deduplicate_preserving_order(warnings),
         fixture=profile.quality.fixture,
+        counters=dict(profile.quality.counters),
     )
 
 

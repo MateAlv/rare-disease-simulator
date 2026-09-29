@@ -30,8 +30,13 @@ class SourcePathsConfig(BaseModel):
 
     hpo_dir: Path = Path("data/raw/hpo")
     hpo_terms_path: Path = Path("data/raw/hpo/hpo_terms.tsv")
+    hpo_json_path: Path = Path("data/raw/hpo/hp.json")
     phenotype_annotation_path: Path = Path("data/raw/hpo/phenotype.hpoa")
     genes_to_phenotype_path: Path = Path("data/raw/hpo/genes_to_phenotype.txt")
+    genes_to_disease_path: Path = Path("data/raw/hpo/genes_to_disease.txt")
+    orphanet_ages_path: Path | None = Path("data/raw/orphadata/en_product9_ages.xml")
+    omim_orpha_map_path: Path | None = None
+    exclude_pmids_path: Path | None = None
     negative_phenotype_annotation_path: Path = Path(
         "data/raw/hpo/negative_phenotype_annotation.tab"
     )

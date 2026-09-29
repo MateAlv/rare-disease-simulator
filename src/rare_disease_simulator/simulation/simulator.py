@@ -225,7 +225,7 @@ def _simulate_one_case(
         target=CaseTarget(
             disease_id=profile.disease_id,
             disease_name=profile.disease_name,
-            gene=_primary_gene(profile),
+            gene=primary_gene(profile),
             gene_label=gene_label,
             disease_label=disease_label,
         ),
@@ -368,7 +368,9 @@ def _sample_noise(
     return noise
 
 
-def _primary_gene(profile: DiseaseProfile) -> str:
+def primary_gene(profile: DiseaseProfile) -> str:
+    """Return the gene a case is labelled with: the first causal gene, else the first gene."""
+
     for gene in profile.genes:
         if gene.association_type == "causal":
             return gene.symbol

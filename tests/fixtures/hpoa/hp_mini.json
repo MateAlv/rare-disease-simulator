@@ -1,0 +1,544 @@
+{
+ "graphs": [
+  {
+   "id": "http://purl.obolibrary.org/obo/hp.json",
+   "meta": {
+    "version": "http://purl.obolibrary.org/obo/hp/releases/2026-02-16/hp.json"
+   },
+   "nodes": [
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000001",
+     "lbl": "All",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000118",
+     "lbl": "Phenotypic abnormality",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000707",
+     "lbl": "Abnormality of the nervous system",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001250",
+     "lbl": "Seizure",
+     "type": "CLASS",
+     "meta": {
+      "synonyms": [
+       {
+        "pred": "hasExactSynonym",
+        "val": "Epileptic seizure"
+       }
+      ],
+      "basicPropertyValues": [
+       {
+        "pred": "http://www.geneontology.org/formats/oboInOwl#hasAlternativeId",
+        "val": "HP:0001275"
+       }
+      ]
+     }
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001251",
+     "lbl": "Ataxia",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001249",
+     "lbl": "Intellectual disability",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000478",
+     "lbl": "Abnormality of the eye",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000505",
+     "lbl": "Visual impairment",
+     "type": "CLASS",
+     "meta": {
+      "basicPropertyValues": [
+       {
+        "pred": "http://www.geneontology.org/formats/oboInOwl#hasAlternativeId",
+        "val": "HP:0000504"
+       }
+      ]
+     }
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000078",
+     "lbl": "Abnormality of the genital system",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000047",
+     "lbl": "Hypospadias",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000140",
+     "lbl": "Abnormality of the menstrual cycle",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001627",
+     "lbl": "Abnormal heart morphology",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000005",
+     "lbl": "Mode of inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0034345",
+     "lbl": "Mendelian inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000006",
+     "lbl": "Autosomal dominant inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000007",
+     "lbl": "Autosomal recessive inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001417",
+     "lbl": "X-linked inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001419",
+     "lbl": "X-linked recessive inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001423",
+     "lbl": "X-linked dominant inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001427",
+     "lbl": "Mitochondrial inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001450",
+     "lbl": "Y-linked inheritance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0034335",
+     "lbl": "Inheritance qualifier",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003829",
+     "lbl": "Typified by incomplete penetrance",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001470",
+     "lbl": "Sex-limited expression",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0001475",
+     "lbl": "Male-limited expression",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0034344",
+     "lbl": "Female-limited expression",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0012823",
+     "lbl": "Clinical modifier",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0031797",
+     "lbl": "Clinical course",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003674",
+     "lbl": "Onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0030674",
+     "lbl": "Antenatal onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0011461",
+     "lbl": "Fetal onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003577",
+     "lbl": "Congenital onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003623",
+     "lbl": "Neonatal onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0410280",
+     "lbl": "Pediatric onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003593",
+     "lbl": "Infantile onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0011463",
+     "lbl": "Childhood onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003621",
+     "lbl": "Juvenile onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003581",
+     "lbl": "Adult onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003596",
+     "lbl": "Middle age onset",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003679",
+     "lbl": "Pace of progression",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0003676",
+     "lbl": "Progressive",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040279",
+     "lbl": "Frequency",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040280",
+     "lbl": "Obligate",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040281",
+     "lbl": "Very frequent",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040282",
+     "lbl": "Frequent",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040283",
+     "lbl": "Occasional",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040284",
+     "lbl": "Very rare",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0040285",
+     "lbl": "Excluded",
+     "type": "CLASS"
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000999",
+     "lbl": "obsolete Unsteady gait",
+     "type": "CLASS",
+     "meta": {
+      "deprecated": true,
+      "basicPropertyValues": [
+       {
+        "pred": "http://purl.obolibrary.org/obo/IAO_0100001",
+        "val": "HP:0001251"
+       }
+      ]
+     }
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/HP_0000489",
+     "lbl": "obsolete Abnormality of globe location or size",
+     "type": "CLASS",
+     "meta": {
+      "deprecated": true,
+      "basicPropertyValues": [
+       {
+        "pred": "http://www.geneontology.org/formats/oboInOwl#consider",
+        "val": "HP:0000478"
+       }
+      ]
+     }
+    },
+    {
+     "id": "http://purl.obolibrary.org/obo/RO_0002451",
+     "lbl": "transmitted by",
+     "type": "PROPERTY"
+    }
+   ],
+   "edges": [
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000118",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000001"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000707",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000118"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001250",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000707"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001251",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000707"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001249",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000707"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000478",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000118"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000505",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000478"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000078",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000118"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000047",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000078"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000140",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000078"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001627",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000118"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000005",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000001"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0034345",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000005"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000006",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034345"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0000007",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034345"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001417",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034345"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001419",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0001417"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001423",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0001417"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001427",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034345"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001450",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034345"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0034335",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000005"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003829",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034335"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001470",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0034335"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0001475",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0001470"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0034344",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0001470"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0012823",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000001"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0031797",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0012823"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003674",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0031797"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0030674",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0011461",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0030674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003577",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003623",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0410280",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003593",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0410280"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0011463",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0410280"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003621",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0410280"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003581",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003674"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003596",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003581"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003679",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0031797"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0003676",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0003679"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040279",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0000001"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040280",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040281",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040282",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040283",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040284",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    },
+    {
+     "sub": "http://purl.obolibrary.org/obo/HP_0040285",
+     "pred": "is_a",
+     "obj": "http://purl.obolibrary.org/obo/HP_0040279"
+    }
+   ]
+  }
+ ]
+}

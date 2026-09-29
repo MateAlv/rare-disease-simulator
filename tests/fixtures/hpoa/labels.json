@@ -1,0 +1,4 @@
+{
+  "genes": {"GENEA": 0, "GENEB": 1},
+  "diseases": {"OMIM:100001": 7}
+}
