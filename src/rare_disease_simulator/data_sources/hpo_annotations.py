@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,24 @@ HPO_ONSET_TERMS: dict[str, str] = {
     "HP:0003621": "juvenile",
     "HP:0003581": "adult",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class HpoaRow:
+    """One raw ``phenotype.hpoa`` line, lightly normalized."""
+
+    line_number: int
+    disease_id: str
+    disease_name: str
+    negated: bool
+    hpo_id: str
+    references: tuple[str, ...]
+    evidence: str | None
+    onset: str | None
+    frequency: str | None
+    sex: str | None
+    modifier: str | None
+    aspect: str
 
 
 @dataclass
@@ -92,6 +111,70 @@ def download_hpo_release(client: HttpClient, target_dir: Path | str) -> dict[str
         path.write_text(client.get(url), encoding="utf-8")
         written[name] = path
     return written
+
+
+def read_hpoa_header(path: Path | str) -> dict[str, str]:
+    """Return the ``#key: value`` metadata lines at the top of a ``phenotype.hpoa``."""
+
+    header: dict[str, str] = {}
+    with Path(path).open("r", encoding="utf-8") as file:
+        for line in file:
+            if not line.startswith("#"):
+                break
+            key, _, value = line[1:].partition(":")
+            header[key.strip()] = value.strip().strip('"')
+    return header
+
+
+def iter_hpoa_rows(path: Path | str) -> Iterator[HpoaRow]:
+    """Yield every data row of ``phenotype.hpoa`` in file order."""
+
+    with Path(path).open("r", encoding="utf-8", newline="") as file:
+        line_number = 0
+        header: list[str] | None = None
+        for raw_line in file:
+            line_number += 1
+            if raw_line.startswith("#"):
+                continue
+            fields = raw_line.rstrip("\r\n").split("\t")
+            if header is None:
+                header = fields
+                continue
+            row = dict(zip(header, fields, strict=False))
+            yield HpoaRow(
+                line_number=line_number,
+                disease_id=_clean(row.get("database_id")) or "",
+                disease_name=_clean(row.get("disease_name")) or "",
+                negated=(_clean(row.get("qualifier")) or "").upper() == "NOT",
+                hpo_id=_clean(row.get("hpo_id")) or "",
+                references=tuple(
+                    ref.strip() for ref in (row.get("reference") or "").split(";") if ref.strip()
+                ),
+                evidence=_clean(row.get("evidence")),
+                onset=_clean(row.get("onset")),
+                frequency=_clean(row.get("frequency")),
+                sex=(_clean(row.get("sex")) or "").upper() or None,
+                modifier=_clean(row.get("modifier")),
+                aspect=(_clean(row.get("aspect")) or "").upper(),
+            )
+
+
+def read_reference_mask(path: Path | str) -> frozenset[str]:
+    """Read a held-out reference list (one ``PMID:n`` or bare PMID per line)."""
+
+    references: set[str] = set()
+    with Path(path).open("r", encoding="utf-8") as file:
+        for line in file:
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            references.add(value if ":" in value else f"PMID:{value}")
+    return frozenset(references)
+
+
+def _clean(value: str | None) -> str | None:
+    stripped = (value or "").strip()
+    return stripped or None
 
 
 def parse_hpoa(path: Path | str, disease_ids: set[str]) -> dict[str, DiseaseAnnotations]:
@@ -156,6 +239,22 @@ def _ingest_row(annotations: DiseaseAnnotations, row: dict[str, str]) -> None:
         annotations.phenotypes.append(phenotype)
 
 
+def frequency_category_for_probability(probability: float) -> str:
+    """Map a probability onto the HPO frequency category whose range contains it."""
+
+    if probability >= 0.99:
+        return "obligate"
+    if probability >= 0.80:
+        return "very_frequent"
+    if probability >= 0.30:
+        return "frequent"
+    if probability >= 0.05:
+        return "occasional"
+    if probability > 0.0:
+        return "very_rare"
+    return "excluded"
+
+
 def _frequency_category(frequency_raw: str | None) -> str | None:
     """Map an HPOA frequency value (HP term, ratio, or percent) to a category."""
 
@@ -167,17 +266,7 @@ def _frequency_category(frequency_raw: str | None) -> str | None:
     percent = _frequency_percent(frequency_raw)
     if percent is None:
         return None
-    if percent >= 0.99:
-        return "obligate"
-    if percent >= 0.80:
-        return "very_frequent"
-    if percent >= 0.30:
-        return "frequent"
-    if percent >= 0.05:
-        return "occasional"
-    if percent > 0.0:
-        return "very_rare"
-    return "excluded"
+    return frequency_category_for_probability(percent)
 
 
 def _frequency_percent(frequency_raw: str) -> float | None:
