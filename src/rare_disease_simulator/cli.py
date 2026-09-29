@@ -25,7 +25,7 @@ from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import download_hpo_release
 from rare_disease_simulator.data_sources.http_client import HttpClient
 from rare_disease_simulator.exports.graphens import write_graphens_json
-from rare_disease_simulator.exports.jsonl import read_model_jsonl, write_jsonl
+from rare_disease_simulator.exports.jsonl import iter_model_jsonl, read_model_jsonl, write_jsonl
 from rare_disease_simulator.profiles.builder import (
     build_profiles_from_fixtures,
     write_profiles_jsonl,
@@ -43,6 +43,7 @@ from rare_disease_simulator.simulation.simulator import (
     primary_gene,
     simulate_cases,
 )
+from rare_disease_simulator.validation.cases import format_report, validate_cases
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -671,12 +672,102 @@ def export_graphens(
 
 
 @app.command("validate")
-def validate(ctx: typer.Context) -> None:
-    """Validate the configured MVP setup."""
+def validate(
+    ctx: typer.Context,
+    cases: Annotated[
+        Path | None,
+        typer.Option(
+            "--cases",
+            help="rich_cases.jsonl to validate; without it only the config is checked.",
+            dir_okay=False,
+        ),
+    ] = None,
+    profiles: Annotated[
+        Path | None,
+        typer.Option(
+            "--profiles",
+            help="Profiles the cases came from (enables calibration and profile checks).",
+            dir_okay=False,
+        ),
+    ] = None,
+    hpo_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--hpo-json",
+            help="HPO hp.json for ancestor/descendant checks (default: configured path).",
+            dir_okay=False,
+        ),
+    ] = None,
+    noise_vocabulary: Annotated[
+        Path | None,
+        typer.Option(
+            "--noise-vocabulary", help="Noise vocabulary TSV the cases used.", dir_okay=False
+        ),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option(
+            "--report",
+            help="Report JSON path (default: <cases stem>.validation.json).",
+            dir_okay=False,
+        ),
+    ] = None,
+) -> None:
+    """Validate the config, or a simulated case set against its profiles and priors.
+
+    Exits with status 1 when any case invariant is violated.
+    """
 
     config = _config_from_context(ctx)
-    genes = ", ".join(disease.gene for disease in config.mvp.diseases)
-    typer.echo(f"Config OK: {len(config.mvp.diseases)} MVP diseases ({genes})")
+    if cases is None:
+        genes = ", ".join(disease.gene for disease in config.mvp.diseases)
+        typer.echo(f"Config OK: {len(config.mvp.diseases)} MVP diseases ({genes})")
+        return
+
+    cases_path = _required_file(cases, "rich cases")
+    hpo_path = hpo_json or config.sources.hpo_json_path
+    if hpo_json is not None:
+        _required_file(hpo_json, "hp.json")
+    ontology = HpoOntology.from_json(hpo_path) if hpo_path.is_file() else None
+    if ontology is None:
+        typer.echo("No hp.json found; negatives are only checked for identical terms.")
+    profile_map = (
+        {
+            profile.disease_id: profile
+            for profile in iter_model_jsonl(_required_file(profiles, "profiles"), DiseaseProfile)
+        }
+        if profiles is not None
+        else None
+    )
+    noise_ids = (
+        {term.hpo_id for term in load_noise_vocabulary(_required_file(noise_vocabulary, "noise"))}
+        if noise_vocabulary is not None
+        else None
+    )
+
+    result = validate_cases(
+        iter_model_jsonl(cases_path, SyntheticCase),
+        profiles=profile_map,
+        ontology=ontology,
+        config=config.simulation,
+        noise_vocabulary=noise_ids,
+    )
+    result = {
+        "inputs": {
+            "cases": _input_record(cases_path),
+            "profiles": _input_record(profiles) if profiles else None,
+            "hp_json": _input_record(hpo_path, ontology.version) if ontology else None,
+            "noise_vocabulary": _input_record(noise_vocabulary) if noise_vocabulary else None,
+        },
+        **result,
+    }
+    report_path = report or cases_path.with_name(f"{cases_path.stem}.validation.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    typer.echo(format_report(result))
+    typer.echo(f"Validation report: {report_path}")
+    if result["violations"]["count"]:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

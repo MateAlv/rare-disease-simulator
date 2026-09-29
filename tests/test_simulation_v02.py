@@ -49,8 +49,7 @@ TERMS = {
 }
 
 
-@pytest.fixture(scope="module")
-def ontology() -> HpoOntology:
+def build_ontology() -> HpoOntology:
     return HpoOntology(
         {
             hpo_id: HpoTerm(
@@ -60,6 +59,11 @@ def ontology() -> HpoOntology:
         },
         version="test",
     )
+
+
+@pytest.fixture(scope="module")
+def ontology() -> HpoOntology:
+    return build_ontology()
 
 
 def _phenotype(hpo_id: str, estimate: float | None, **extra) -> PhenotypeAssociation:
