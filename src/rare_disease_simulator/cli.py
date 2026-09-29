@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -10,6 +13,7 @@ import typer
 from pydantic import ValidationError
 
 from rare_disease_simulator import __version__
+from rare_disease_simulator.build_info import git_revision, sha256_file
 from rare_disease_simulator.config import (
     DEFAULT_CONFIG_PATH,
     AppConfig,
@@ -18,6 +22,7 @@ from rare_disease_simulator.config import (
     load_config,
 )
 from rare_disease_simulator.data_sources.fetch import DiseaseQuery, fetch_disease_sources
+from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import download_hpo_release
 from rare_disease_simulator.data_sources.http_client import HttpClient
 from rare_disease_simulator.exports.graphens import write_graphens_json
@@ -26,9 +31,11 @@ from rare_disease_simulator.profiles.builder import (
     build_profiles_from_fixtures,
     write_profiles_jsonl,
 )
+from rare_disease_simulator.profiles.hpoa_builder import HpoaBuildInputs, build_profiles_from_hpoa
 from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
-from rare_disease_simulator.simulation.simulator import simulate_cases
+from rare_disease_simulator.simulation.simulator import primary_gene, simulate_cases
 
 app = typer.Typer(
     help="Build disease profiles and simulate rare disease phenotype cases.",
@@ -86,6 +93,18 @@ def callback(
 def _config_from_context(ctx: typer.Context) -> AppConfig:
     config_path = ctx.obj["config_path"] if ctx.obj else DEFAULT_CONFIG_PATH
     return _load_config_or_exit(config_path)
+
+
+def _required_file(path: Path, label: str) -> Path:
+    if not path.is_file():
+        raise typer.BadParameter(f"{label} not found: {path}")
+    return path
+
+
+def _optional_file(path: Path | None, label: str) -> Path | None:
+    if path is None:
+        return None
+    return _required_file(path, label)
 
 
 @app.command("fetch-sources")
@@ -206,6 +225,55 @@ def extract_profile_patches(ctx: typer.Context) -> None:
 @app.command("build-profiles")
 def build_profiles(
     ctx: typer.Context,
+    from_hpoa: Annotated[
+        bool,
+        typer.Option(
+            "--from-hpoa",
+            help="Build one profile per gene-linked disease from the HPO annotation release.",
+        ),
+    ] = False,
+    hpo_json: Annotated[
+        Path | None, typer.Option("--hpo-json", help="HPO ontology hp.json.", dir_okay=False)
+    ] = None,
+    hpoa: Annotated[
+        Path | None, typer.Option("--hpoa", help="HPO phenotype.hpoa.", dir_okay=False)
+    ] = None,
+    genes_to_disease: Annotated[
+        Path | None,
+        typer.Option("--genes-to-disease", help="HPO genes_to_disease.txt.", dir_okay=False),
+    ] = None,
+    orphanet_ages: Annotated[
+        Path | None,
+        typer.Option(
+            "--orphanet-ages",
+            help="Orphanet en_product9_ages.xml (age-of-onset fallback).",
+            dir_okay=False,
+        ),
+    ] = None,
+    omim_orpha_map: Annotated[
+        Path | None,
+        typer.Option(
+            "--omim-orpha-map",
+            help="Orphanet en_product1 alignments XML (OMIM -> ORPHA onset fallback).",
+            dir_okay=False,
+        ),
+    ] = None,
+    exclude_pmids: Annotated[
+        Path | None,
+        typer.Option(
+            "--exclude-pmids",
+            help="Held-out references, one per line; HPOA rows citing any are dropped.",
+            dir_okay=False,
+        ),
+    ] = None,
+    summary: Annotated[
+        Path | None,
+        typer.Option(
+            "--summary",
+            help="Build summary JSON path (default: <output stem>.summary.json).",
+            dir_okay=False,
+        ),
+    ] = None,
     fixture_dir: Annotated[
         Path | None,
         typer.Option(
@@ -231,10 +299,36 @@ def build_profiles(
     """Build validated DiseaseProfile artifacts."""
 
     config = _config_from_context(ctx)
+    if from_hpoa and fixture_dir is not None:
+        raise typer.BadParameter("use either --from-hpoa or --fixture-dir, not both")
+    if from_hpoa:
+        sources = config.sources
+        inputs = HpoaBuildInputs(
+            hpo_json=_required_file(hpo_json or sources.hpo_json_path, "hp.json"),
+            phenotype_hpoa=_required_file(
+                hpoa or sources.phenotype_annotation_path, "phenotype.hpoa"
+            ),
+            genes_to_disease=_required_file(
+                genes_to_disease or sources.genes_to_disease_path, "genes_to_disease"
+            ),
+            orphanet_ages=_optional_file(
+                orphanet_ages or sources.orphanet_ages_path, "Orphanet ages"
+            ),
+            omim_orpha_map=_optional_file(
+                omim_orpha_map or sources.omim_orpha_map_path, "OMIM-ORPHA map"
+            ),
+            exclude_pmids=_optional_file(
+                exclude_pmids or sources.exclude_pmids_path, "PMID mask"
+            ),
+        )
+        _build_profiles_from_hpoa(inputs, output or config.exports.profiles_path, summary)
+        return
     if fixture_dir is None:
         typer.echo(f"Configured MVP diseases: {len(config.mvp.diseases)}")
         typer.echo(f"Profiles output: {config.exports.profiles_path}")
-        typer.echo("No profile source selected. Use --fixture-dir to run the fixture path.")
+        typer.echo(
+            "No profile source selected. Use --from-hpoa, or --fixture-dir for the fixture path."
+        )
         return
 
     result = build_profiles_from_fixtures(fixture_dir)
@@ -245,6 +339,57 @@ def build_profiles(
     typer.echo(f"Wrote {written_count} profile(s) to {output_path}")
     if result.warnings:
         typer.echo(f"Quality warnings: {', '.join(result.warnings)}")
+
+
+def _build_profiles_from_hpoa(
+    inputs: HpoaBuildInputs, output_path: Path, summary_path: Path | None
+) -> None:
+    if inputs.exclude_pmids is None:
+        typer.echo(
+            "WARNING: no --exclude-pmids given; profiles may include annotations from "
+            "evaluation publications.",
+            err=True,
+        )
+    started = time.perf_counter()
+    result = build_profiles_from_hpoa(inputs)
+    written = write_profiles_jsonl(output_path, result.profiles)
+    elapsed = time.perf_counter() - started
+
+    build_summary = {
+        "build": {
+            "command": "build-profiles --from-hpoa",
+            "simulator_version": __version__,
+            "simulator_git": git_revision(),
+            "generated_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
+            "wall_time_seconds": round(elapsed, 2),
+        },
+        **result.summary,
+        "output": {
+            "profiles_path": str(output_path),
+            "profiles_written": written,
+            "bytes": output_path.stat().st_size,
+            "sha256": sha256_file(output_path),
+        },
+    }
+    summary_path = summary_path or output_path.with_name(f"{output_path.stem}.summary.json")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(build_summary, indent=2) + "\n", encoding="utf-8")
+
+    masking = result.summary["masking"]
+    phenotypes = result.summary["phenotypes"]
+    typer.echo(f"Wrote {written} profile(s) to {output_path}")
+    typer.echo(
+        f"Phenotype annotations: {phenotypes['annotations']}, "
+        f"negatives: {result.summary['negatives'].get('annotations', 0)}, "
+        f"genes: {result.summary['genes']['unique_symbols']}"
+    )
+    if masking["enabled"]:
+        typer.echo(
+            f"Masked {masking['rows_masked']} HPOA row(s) across "
+            f"{masking['diseases_affected']} disease(s); "
+            f"{masking['diseases_dropped_zero_positive']} disease(s) left without phenotypes."
+        )
+    typer.echo(f"Build summary: {summary_path}")
 
 
 def _simulation_config(settings: SimulationSettings) -> SimulationConfig:
@@ -278,6 +423,30 @@ def simulate(
             resolve_path=False,
         ),
     ] = None,
+    hpo_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--hpo-json",
+            help="HPO hp.json enabling ontology generalization (default: configured path).",
+            dir_okay=False,
+        ),
+    ] = None,
+    noise_vocabulary: Annotated[
+        Path | None,
+        typer.Option(
+            "--noise-vocabulary",
+            help="TSV with hpo_id and optional label columns of nonspecific noise terms.",
+            dir_okay=False,
+        ),
+    ] = None,
+    labels: Annotated[
+        Path | None,
+        typer.Option(
+            "--labels",
+            help='JSON {"genes": {symbol: int}, "diseases": {disease_id: int}}.',
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Simulate synthetic patient cases from validated profiles."""
 
@@ -286,11 +455,34 @@ def simulate(
     if not profiles_path.exists():
         raise typer.BadParameter(f"profiles file not found: {profiles_path}")
 
+    if hpo_json is not None:
+        ontology = HpoOntology.from_json(_required_file(hpo_json, "hp.json"))
+    elif config.sources.hpo_json_path.is_file():
+        ontology = HpoOntology.from_json(config.sources.hpo_json_path)
+    else:
+        ontology = None
+        typer.echo("No hp.json found; simulating without ontology generalization.")
+    noise_terms = (
+        load_noise_vocabulary(_required_file(noise_vocabulary, "noise vocabulary"), ontology)
+        if noise_vocabulary is not None
+        else None
+    )
+    label_maps = load_label_maps(_required_file(labels, "labels")) if labels else None
+
     sim_config = _simulation_config(config.simulation)
     profile_records = read_model_jsonl(profiles_path, DiseaseProfile)
     cases: list[SyntheticCase] = []
     for profile in profile_records:
-        cases.extend(simulate_cases(profile, sim_config))
+        cases.extend(
+            simulate_cases(
+                profile,
+                sim_config,
+                ontology=ontology,
+                noise_vocabulary=noise_terms,
+                gene_label=label_maps.genes.get(primary_gene(profile)) if label_maps else None,
+                disease_label=label_maps.diseases.get(profile.disease_id) if label_maps else None,
+            )
+        )
 
     output_path = output or config.exports.rich_cases_path
     written = write_jsonl(output_path, cases)

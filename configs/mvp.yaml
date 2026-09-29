@@ -28,8 +28,15 @@ mvp:
 sources:
   hpo_dir: data/raw/hpo
   hpo_terms_path: data/raw/hpo/hpo_terms.tsv
+  hpo_json_path: data/raw/hpo/hp.json
   phenotype_annotation_path: data/raw/hpo/phenotype.hpoa
   genes_to_phenotype_path: data/raw/hpo/genes_to_phenotype.txt
+  genes_to_disease_path: data/raw/hpo/genes_to_disease.txt
+  orphanet_ages_path: data/raw/orphadata/en_product9_ages.xml
+  # Optional: Orphanet en_product1 alignments, enables the OMIM -> ORPHA onset fallback.
+  omim_orpha_map_path: null
+  # Held-out publication list; HPOA rows citing any of these are dropped.
+  exclude_pmids_path: null
   negative_phenotype_annotation_path: data/raw/hpo/negative_phenotype_annotation.tab
   orphadata_dir: data/raw/orphadata
   mondo_path: data/raw/mondo/mondo.json
