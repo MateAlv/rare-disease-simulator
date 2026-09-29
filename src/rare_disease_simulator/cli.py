@@ -35,7 +35,7 @@ from rare_disease_simulator.profiles.schema import DiseaseProfile
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
-from rare_disease_simulator.simulation.schema import SyntheticCase
+from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
 from rare_disease_simulator.simulation.simulator import (
     SIMULATOR_VERSION,
     SexSpecificTerms,
@@ -712,6 +712,15 @@ def validate(
             dir_okay=False,
         ),
     ] = None,
+    run_summary: Annotated[
+        Path | None,
+        typer.Option(
+            "--run-summary",
+            help="simulate's run summary, whose config is used for the priors "
+            "(default: <cases stem>.summary.json when present, else the app config).",
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Validate the config, or a simulated case set against its profiles and priors.
 
@@ -745,14 +754,22 @@ def validate(
         else None
     )
 
+    summary_path = run_summary or cases_path.with_name(f"{cases_path.stem}.summary.json")
+    sim_config, config_source = config.simulation, "app config"
+    if run_summary is not None or summary_path.is_file():
+        run_data = json.loads(_required_file(summary_path, "run summary").read_text("utf-8"))
+        sim_config = SimulationConfig.model_validate(run_data["config"])
+        config_source = str(summary_path)
+
     result = validate_cases(
         iter_model_jsonl(cases_path, SyntheticCase),
         profiles=profile_map,
         ontology=ontology,
-        config=config.simulation,
+        config=sim_config,
         noise_vocabulary=noise_ids,
     )
     result = {
+        "config_source": config_source,
         "inputs": {
             "cases": _input_record(cases_path),
             "profiles": _input_record(profiles) if profiles else None,

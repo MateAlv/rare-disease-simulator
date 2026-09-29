@@ -127,6 +127,8 @@ def test_build_simulate_validate_end_to_end(tmp_path: Path) -> None:
     assert "Invariant violations: 0" in validated.output
     report = json.loads((tmp_path / "cases.validation.json").read_text(encoding="utf-8"))
     assert report["cases"] == 4 * 25 * 3
+    assert report["config_source"] == str(tmp_path / "cases.summary.json")
+    assert report["config_matches_cases"] is True
     assert report["inputs"]["profiles"]["sha256"]
     assert report["calibration"]["all_terms"]["calibration_error"] is not None
 
