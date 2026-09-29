@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JDBOR date="2026-06-23 07:53:50" version="fixture" copyright="Orphanet (c) 2026">
+  <DisorderList count="4">
+    <Disorder id="1">
+      <OrphaCode>2002</OrphaCode>
+      <Name lang="en">Beta X-linked syndrome</Name>
+      <DisorderFlagList count="1">
+        <DisorderFlag id="475"><Value>1</Value><Label></Label></DisorderFlag>
+      </DisorderFlagList>
+      <ExternalReferenceList count="3">
+        <ExternalReference id="1">
+          <Source>OMIM</Source>
+          <Reference>100002</Reference>
+          <DisorderMappingRelation id="21541"><Name lang="en">E (Exact mapping: the terms and the concepts are equivalent)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21611"><Name lang="en">Validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+        <ExternalReference id="2">
+          <Source>ICD-10</Source>
+          <Reference>Q99.9</Reference>
+          <DisorderMappingRelation id="21541"><Name lang="en">E (Exact mapping: the terms and the concepts are equivalent)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21611"><Name lang="en">Validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+        <ExternalReference id="3">
+          <Source>OMIM</Source>
+          <Reference>100001</Reference>
+          <DisorderMappingRelation id="21548"><Name lang="en">BTNT (ORPHAcode is broader than the targeted code)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21611"><Name lang="en">Validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+    <Disorder id="2">
+      <OrphaCode>3001</OrphaCode>
+      <Name lang="en">Gamma disease</Name>
+      <ExternalReferenceList count="1">
+        <ExternalReference id="4">
+          <Source>OMIM</Source>
+          <Reference>100099</Reference>
+          <DisorderMappingRelation id="21534"><Name lang="en">NTBT (ORPHAcode is narrower than the targeted code used to represent it)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21611"><Name lang="en">Validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+    <Disorder id="3">
+      <OrphaCode>5000</OrphaCode>
+      <Name lang="en">Not yet validated alignment</Name>
+      <ExternalReferenceList count="1">
+        <ExternalReference id="5">
+          <Source>OMIM</Source>
+          <Reference>100001</Reference>
+          <DisorderMappingRelation id="21541"><Name lang="en">E (Exact mapping: the terms and the concepts are equivalent)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21618"><Name lang="en">Not yet validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+    <Disorder id="4">
+      <OrphaCode>6000</OrphaCode>
+      <Name lang="en">Deprecated theta entity</Name>
+      <DisorderFlagList count="2">
+        <DisorderFlag id="1"><Value>8192</Value><Label>Inactive</Label></DisorderFlag>
+        <DisorderFlag id="2"><Value>256</Value><Label>Deprecated entity</Label></DisorderFlag>
+      </DisorderFlagList>
+      <ExternalReferenceList count="1">
+        <ExternalReference id="6">
+          <Source>OMIM</Source>
+          <Reference>100008</Reference>
+          <DisorderMappingRelation id="21541"><Name lang="en">E (Exact mapping: the terms and the concepts are equivalent)</Name></DisorderMappingRelation>
+          <DisorderMappingValidationStatus id="21611"><Name lang="en">Validated</Name></DisorderMappingValidationStatus>
+        </ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+  </DisorderList>
+</JDBOR>

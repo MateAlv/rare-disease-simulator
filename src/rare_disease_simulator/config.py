@@ -7,6 +7,10 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from rare_disease_simulator.simulation.schema import SimulationConfig
+
+SimulationSettings = SimulationConfig
+
 DEFAULT_CONFIG_PATH = Path("configs/mvp.yaml")
 
 
@@ -55,14 +59,6 @@ class LlmConfig(BaseModel):
     temperature: float = 0.0
 
 
-class SimulationSettings(BaseModel):
-    """Synthetic case simulation settings."""
-
-    difficulties: list[str] = Field(default_factory=lambda: ["easy", "medium", "hard"])
-    cases_per_disease_per_difficulty: int = 100
-    seed: int = 42
-
-
 class ExportPathsConfig(BaseModel):
     """Output artifact paths."""
 
@@ -87,7 +83,7 @@ class AppConfig(BaseModel):
     mvp: MvpConfig
     sources: SourcePathsConfig = Field(default_factory=SourcePathsConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
-    simulation: SimulationSettings = Field(default_factory=SimulationSettings)
+    simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     exports: ExportPathsConfig = Field(default_factory=ExportPathsConfig)
     fixtures: FixtureConfig = Field(default_factory=FixtureConfig)
 

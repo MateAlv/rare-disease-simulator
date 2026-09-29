@@ -25,18 +25,23 @@ mvp:
     - disease: Noonan syndrome
       gene: PTPN11
 
+# The HPOA build reads the inputs pinned by diagnostic.ar-training
+# (data/sources.yaml), which is checked out next to this repo.
 sources:
   hpo_dir: data/raw/hpo
   hpo_terms_path: data/raw/hpo/hpo_terms.tsv
-  hpo_json_path: data/raw/hpo/hp.json
-  phenotype_annotation_path: data/raw/hpo/phenotype.hpoa
+  # HPO 2026-02-16.
+  hpo_json_path: ../diagnostic.ar-training/data/raw/hpo_ontology/hp.json
+  phenotype_annotation_path: ../diagnostic.ar-training/data/raw/hpo_annotations/phenotype.hpoa
   genes_to_phenotype_path: data/raw/hpo/genes_to_phenotype.txt
-  genes_to_disease_path: data/raw/hpo/genes_to_disease.txt
-  orphanet_ages_path: data/raw/orphadata/en_product9_ages.xml
-  # Optional: Orphanet en_product1 alignments, enables the OMIM -> ORPHA onset fallback.
-  omim_orpha_map_path: null
-  # Held-out publication list; HPOA rows citing any of these are dropped.
-  exclude_pmids_path: null
+  genes_to_disease_path: ../diagnostic.ar-training/data/raw/hpo_genes_to_disease/genes_to_disease.txt
+  # Orphanet 2026-06-23, sha256 38fef7e9e398addb147e57df7bb523e5ef072e03c0208ae81b37a2fd200af1ab.
+  orphanet_ages_path: ../diagnostic.ar-training/data/raw/orphanet_ages_2026_06/en_product9_ages.xml
+  # Orphanet 2026-06-23 en_product1, sha256 df8d562a0c6011af36a74eb4000ce81ca7d723e8031010819fb71727c0962bbb.
+  # Only exact, validated alignments carry Orphanet onset to OMIM diseases.
+  omim_orpha_map_path: ../diagnostic.ar-training/data/raw/orphanet_alignments/en_product1.xml
+  # Held-out publications of the frozen r1-v1 split; HPOA rows citing any are dropped.
+  exclude_pmids_path: ../diagnostic.ar-training/data/splits/r1-v1.heldout-pmids.txt
   negative_phenotype_annotation_path: data/raw/hpo/negative_phenotype_annotation.tab
   orphadata_dir: data/raw/orphadata
   mondo_path: data/raw/mondo/mondo.json

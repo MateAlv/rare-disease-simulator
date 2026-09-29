@@ -26,7 +26,7 @@ def _inputs(**overrides: Path | None) -> HpoaBuildInputs:
         phenotype_hpoa=FIXTURES / "phenotype_mini.hpoa",
         genes_to_disease=FIXTURES / "genes_to_disease_mini.txt",
         orphanet_ages=FIXTURES / "orphanet_ages_mini.xml",
-        omim_orpha_map=FIXTURES / "omim_orpha_mini.xml",
+        omim_orpha_map=FIXTURES / "en_product1_mini.xml",
         exclude_pmids=FIXTURES / "heldout_pmids.txt",
     )
     return replace(inputs, **overrides)
@@ -64,15 +64,17 @@ def test_genes_keep_symbol_ncbi_id_and_association_type(result) -> None:
     assert {gene.association_type for gene in gamma.genes} == {"unknown"}
 
 
-def test_frequency_terms_map_to_hpo_ranges(result) -> None:
+def test_frequency_terms_map_to_hpo_range_midpoints(result) -> None:
     alpha = _profile(result, "OMIM:100001")
     seizure = _phenotype(alpha, "HP:0001250")
     assert seizure.frequency == "frequent"
+    assert seizure.frequency_estimate == 0.545
     assert (seizure.probability_range.lower, seizure.probability_range.upper) == (0.30, 0.79)
 
     gamma = _profile(result, "ORPHA:3001")
     heart = _phenotype(gamma, "HP:0001627")
     assert heart.frequency == "obligate"
+    assert heart.frequency_estimate == 1.0
     assert (heart.probability_range.lower, heart.probability_range.upper) == (1.0, 1.0)
 
 
@@ -81,6 +83,7 @@ def test_ratio_and_percent_frequencies_become_point_estimates(result) -> None:
     vision = _phenotype(alpha, "HP:0000505")
     assert vision.frequency_raw == "20%"
     assert vision.frequency == "occasional"
+    assert vision.frequency_estimate == 0.2
     assert vision.probability_range.lower == vision.probability_range.upper == 0.2
 
 
@@ -88,14 +91,30 @@ def test_duplicate_rows_pool_ratio_counts_across_references(result) -> None:
     ataxia = _phenotype(_profile(result, "OMIM:100001"), "HP:0001251")
 
     assert ataxia.frequency_raw == "4/8"
-    assert ataxia.probability_range.lower == ataxia.probability_range.upper == 0.5
+    assert ataxia.frequency_estimate == 0.5
+    lower, upper = ataxia.probability_range.lower, ataxia.probability_range.upper
+    assert (lower, upper) == (0.199, 0.801)
     assert ataxia.source == ["OMIM:100001", "PMID:2", "PMID:3"]
+
+
+def test_small_counts_are_shrunk_so_n_of_n_is_not_obligate(result) -> None:
+    hypospadias = _phenotype(_profile(result, "OMIM:100002"), "HP:0000047")
+
+    assert hypospadias.frequency_raw == "2/3"
+    assert hypospadias.frequency_estimate == 0.625
+    assert hypospadias.frequency == "frequent"
+    assert result.summary["phenotypes"]["by_frequency_basis"] == {
+        "category": 4,
+        "counts": 6,
+        "percent": 1,
+    }
 
 
 def test_duplicate_frequency_terms_use_the_envelope_of_their_ranges(result) -> None:
     ataxia = _phenotype(_profile(result, "ORPHA:3001"), "HP:0001251")
 
     assert ataxia.frequency_raw == "HP:0040281;HP:0040283"
+    assert ataxia.frequency_estimate == 0.5325
     assert (ataxia.probability_range.lower, ataxia.probability_range.upper) == (0.05, 0.99)
 
 
@@ -103,20 +122,35 @@ def test_missing_frequency_stays_unknown_not_always(result) -> None:
     disability = _phenotype(_profile(result, "OMIM:100001"), "HP:0001249")
 
     assert disability.frequency == "unknown"
+    assert disability.frequency_estimate is None
     assert disability.probability_range is None
     assert disability.frequency_raw is None
 
 
-def test_negatives_from_not_excluded_frequency_and_zero_counts(result) -> None:
+def test_negatives_come_only_from_not_and_excluded_frequency(result) -> None:
     alpha = _profile(result, "OMIM:100001")
 
     assert [negative.hpo_id for negative in alpha.negative_phenotypes] == [
         "HP:0000047",
-        "HP:0000140",
         "HP:0001627",
     ]
     positive_ids = {phenotype.hpo_id for phenotype in alpha.phenotypes}
-    assert positive_ids.isdisjoint({"HP:0000047", "HP:0000140", "HP:0001627"})
+    assert positive_ids.isdisjoint({"HP:0000047", "HP:0001627"})
+    assert result.summary["negatives"] == {
+        "annotations": 2,
+        "dropped_conflict_with_positive": 1,
+        "from_excluded_frequency": 1,
+        "from_not_qualifier": 1,
+    }
+
+
+def test_zero_count_is_a_low_frequency_not_a_negative(result) -> None:
+    ptosis = _phenotype(_profile(result, "OMIM:100001"), "HP:0000140")
+
+    assert ptosis.frequency_raw == "0/5"
+    assert ptosis.frequency_estimate == 0.0833
+    assert ptosis.frequency == "occasional"
+    assert ptosis.probability_range.lower == 0.0
 
 
 def test_positive_evidence_wins_over_a_conflicting_not_row(result) -> None:
@@ -167,12 +201,29 @@ def test_orphanet_onset_fallback_direct_and_via_omim_mapping(result) -> None:
     assert beta is not None
     assert (beta.category, beta.distribution) == ("adult", {"adult": 1.0})
     assert "ORPHA:2002" in (beta.provenance[0].evidence or "")
-    assert result.summary["age_of_onset"]["by_source"] == {
+    assert [item.source.name for item in beta.provenance] == [
+        "Orphanet average age of onset",
+        "Orphanet OMIM-ORPHA alignments",
+    ]
+    onset = result.summary["age_of_onset"]
+    assert onset["by_source"] == {
         "hpoa": 1,
         "none": 1,
         "orphanet_direct": 1,
         "orphanet_via_omim": 1,
     }
+    assert onset["gained_via_omim_mapping"] == 1
+    assert (onset["fraction_with_onset_without_mapping"], onset["fraction_with_onset"]) == (
+        0.5,
+        0.75,
+    )
+
+
+def test_onset_never_transfers_through_inexact_unvalidated_or_inactive_mappings(result) -> None:
+    assert _profile(result, "OMIM:100001").age_of_onset.provenance[0].source.name == (
+        "HPO disease annotations"
+    )
+    assert _profile(result, "OMIM:100008").age_of_onset is None
 
 
 def test_without_omim_orpha_map_only_orpha_diseases_get_orphanet_onset() -> None:
@@ -287,11 +338,23 @@ def test_genes_to_disease_reader_skips_dash_and_deduplicates() -> None:
 
 def test_orphanet_readers_keep_exact_validated_mappings_and_real_onsets() -> None:
     onsets = read_orphanet_onsets(FIXTURES / "orphanet_ages_mini.xml")
+    assert onsets.version == "2026-06-23 07:53:50"
     assert onsets.onsets == {
         "ORPHA:2002": ("Adult", "Elderly"),
         "ORPHA:3001": ("Infancy", "Neonatal"),
+        "ORPHA:5000": ("Adolescent",),
+        "ORPHA:6000": ("Childhood",),
     }
 
-    mapping = read_omim_orpha_map(FIXTURES / "omim_orpha_mini.xml")
+    mapping = read_omim_orpha_map(FIXTURES / "en_product1_mini.xml")
     assert mapping.omim_to_orpha == {"OMIM:100002": ("ORPHA:2002",)}
     assert mapping.orpha_to_omim == {"ORPHA:2002": ("OMIM:100002",)}
+    assert mapping.stats == {
+        "exact_skipped_inactive_disorder": 1,
+        "omim_BTNT_validated": 1,
+        "omim_E_not_validated": 1,
+        "omim_E_validated": 2,
+        "omim_NTBT_validated": 1,
+        "omim_ids_mapped": 1,
+        "omim_ids_with_several_orpha": 0,
+    }
