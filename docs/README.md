@@ -511,6 +511,21 @@ The count per case is Gamma-Poisson (negative binomial) with mean `negatives_mea
 
 Weights are relative odds. Disease-first runs leave (a′) out of the slot draw, because a disease-first case has no gene context. Their cases are identical to v0.2 apart from the new metadata fields.
 
+**How many negatives the defaults give.** With the medium preset, the requested count averages 5.27: E[min(NB(7, shape 2), 15)] = 6.58, times 0.8 for `no_negatives`. The full gene-first run (5,050 genes × 10 cases, simulator `362af8b`) realizes 3.69 negatives per case, or 5.05 among the 73% of cases that have any. Real records carry about 11. The pools are the limit: own-disease terms are few and many are related to a present term.
+
+On a 505-gene sample (every tenth GNN gene, medium, same seed):
+
+| Knobs | Negatives per case | own / gene-other / confounder / NOT share |
+| --- | --- | --- |
+| v0.2 pools (`own_disease_pool: profile`, gene-other odds 0) | 3.53 | 0.71 / – / 0.29 / 0.00 |
+| defaults | 3.60 | 0.68 / 0.06 / 0.26 / 0.00 |
+| defaults + `unfilled_slots: redistribute` | 5.10 | 0.56 / 0.08 / 0.36 / 0.00 |
+| medium mean 12, cap 40, `no_negatives` 0, v0.2 pools | 7.00 | 0.66 / – / 0.33 / 0.00 |
+| same, new pools | 7.50 | 0.65 / 0.06 / 0.28 / 0.00 |
+| same, new pools + `redistribute` | 11.35 | 0.48 / 0.09 / 0.43 / 0.00 |
+
+The equivalent-profile and gene-other pools add only about 0.1–0.5 negatives per case. OMIM and ORPHA profiles of one entity mostly share terms, and half of the genes have a single simulable entity. A calibration reaches a real-sized count through `negatives_mean`, `max_per_case` and `unfilled_slots: redistribute`, at the cost of a mix that leans toward confounders. These are sensitivity runs on synthetic output, not fits: the values belong to the R1-train calibration.
+
 Own-disease terms dominate because real case reports mostly list which typical signs of the syndrome a patient lacks: on R1-dev, 45.1% of excluded terms are annotated to the true gene's diseases against 32.0% for the GNN's top-5 wrong candidates (`diagnostic.ar-training` `docs/experiments/EXP-B-001.md`, Addendum 1). Preset means are 10 (easy), 7 (medium) and 4 (hard), so counts reach the dozen negatives real records carry; with small pools they are lower in practice.
 
 **Confounder index** (`ConfounderIndex`, built once over all profiles). Each disease is its positive terms plus their ancestors; a term's information content is `−ln(share of diseases carrying it)`; only terms with IC ≥ `negatives.min_information_content` (2.0 nats) enter the inverted index. Similarity is the cosine of the IC-weighted vectors. Only the diseases actually simulated are queried, and results are cached.
