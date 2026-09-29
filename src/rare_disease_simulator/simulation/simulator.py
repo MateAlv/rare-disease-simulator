@@ -570,6 +570,7 @@ def _simulate_one_case(
         if observation.positives:
             break
     if observation is None or not observation.positives:
+        patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
 
     negatives = _sample_negatives(
@@ -723,6 +724,28 @@ def _observe(
                 )
             )
     return observation
+
+
+def _presentable_sex(
+    model: _DiseaseModel, patient: _Patient, sex_terms: SexSpecificTerms
+) -> _Patient:
+    """The patient, switched to the other sex when no profile term fits theirs.
+
+    A disease whose every term is restricted to one sex (e.g. only ovarian
+    findings) cannot present in the other, so forcing a term would emit a
+    sex-inappropriate finding.
+    """
+
+    def admits(sex: Sex) -> bool:
+        return any(
+            sex_terms.allowed(term.phenotype.hpo_id, term.phenotype.sex_restriction, sex)
+            for term in model.terms
+        )
+
+    other: Sex = "female" if patient.sex == "male" else "male"
+    if admits(patient.sex) or not admits(other):
+        return patient
+    return replace(patient, sex=other)
 
 
 def _forced_observation(

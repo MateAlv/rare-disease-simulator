@@ -421,3 +421,22 @@ def test_terms_merged_by_generalization_stay_in_the_case(ontology) -> None:
         assert [(m.hpo_id, m.reason) for m in case.missing_phenotypes] == [
             ("HP:0001251", MERGED_REASON)
         ]
+
+
+def test_a_disease_only_one_sex_can_present_forces_that_sex(ontology) -> None:
+    ovarian = _profile(
+        "OMIM:6",
+        [_phenotype("HP:0000008", 0.3, onset="adult", onset_hpo_id="HP:0003581")],
+        age_of_onset=AgeOfOnset(category="infantile"),
+    )
+    config = _config(
+        difficulties=["easy"],
+        cases_per_disease_per_difficulty=30,
+        max_redraws=0,
+        sex={"p_male": {"unbiased": 1.0}},
+    )
+
+    cases = simulate_cases(ovarian, config, ontology=ontology)
+
+    assert {case.patient.sex for case in cases} == {"female"}
+    assert all(case.positive_phenotypes for case in cases)
