@@ -11,7 +11,9 @@ entity lists; those diseases get the gene-profile genes). Mapping rules (see ``d
 - aspect ``I`` rows become gene inheritance and, where sound, a sex bias;
 - aspect ``C`` onset rows become the disease age of onset, with Orphanet average
   age of onset as fallback; ``C`` pace-of-progression rows set ``progression``;
-- rows citing a held-out reference are dropped before anything else.
+- rows citing a held-out reference are dropped before anything else;
+- listed (disease, term) positive annotations (an annotation holdout) are
+  dropped before profiles are built.
 
 Output is deterministic: diseases, genes and terms are emitted in sorted order
 and no timestamps are written into profiles.
@@ -35,6 +37,7 @@ from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.data_sources.hpo_annotations import (
     HpoaRow,
     iter_hpoa_rows,
+    read_annotation_holdout,
     read_hpoa_header,
     read_reference_mask,
 )
@@ -140,6 +143,7 @@ class HpoaBuildInputs:
     omim_orpha_map: Path | None = None
     exclude_pmids: Path | None = None
     gene_profiles: Path | None = None
+    drop_annotations: Path | None = None
 
 
 @dataclass
@@ -159,11 +163,11 @@ class _SourceContext:
     alignments: SourceReference | None
     mask: SourceReference | None
     gene_profiles: SourceReference | None = None
+    holdout: SourceReference | None = None
 
     def base_provenance(self) -> list[Provenance]:
         sources = [self.hpoa, self.genes, self.ontology]
-        if self.mask is not None:
-            sources.append(self.mask)
+        sources.extend(source for source in (self.mask, self.holdout) if source is not None)
         return [Provenance(source=source) for source in sources]
 
 
@@ -183,6 +187,7 @@ class _Stats:
     sex_bias: Counter[str] = field(default_factory=Counter)
     progression: Counter[str] = field(default_factory=Counter)
     masked_diseases: set[str] = field(default_factory=set)
+    holdout_matched: set[tuple[str, str]] = field(default_factory=set)
     genes: set[str] = field(default_factory=set)
     gene_links: int = 0
     multi_gene_diseases: int = 0
@@ -198,6 +203,11 @@ def build_profiles_from_hpoa(
     hpoa_header = read_hpoa_header(inputs.phenotype_hpoa)
     genes = read_genes_to_disease(inputs.genes_to_disease)
     mask = read_reference_mask(inputs.exclude_pmids) if inputs.exclude_pmids else frozenset()
+    holdout = (
+        read_annotation_holdout(inputs.drop_annotations)
+        if inputs.drop_annotations
+        else frozenset()
+    )
     orphanet = read_orphanet_onsets(inputs.orphanet_ages) if inputs.orphanet_ages else None
     omim_orpha = read_omim_orpha_map(inputs.omim_orpha_map) if inputs.omim_orpha_map else None
     links: dict[str, tuple[GeneDiseaseLink, ...]] = dict(genes.links)
@@ -258,11 +268,14 @@ def build_profiles_from_hpoa(
             omim_orpha=omim_orpha,
             sources=sources,
             stats=stats,
+            holdout=holdout,
         )
         if profile is None:
             stats.diseases["dropped_zero_positive"] += 1
             if disease_id in positives_before_mask and disease_id in stats.masked_diseases:
                 stats.diseases["dropped_zero_positive_due_to_mask"] += 1
+            if any(pair[0] == disease_id for pair in stats.holdout_matched):
+                stats.diseases["dropped_zero_positive_due_to_holdout"] += 1
             continue
         if disease_id in added_links and sources.gene_profiles is not None:
             stats.diseases["built_from_gene_profiles_links"] += 1
@@ -276,6 +289,7 @@ def build_profiles_from_hpoa(
         input_records=input_records,
         omim_orpha=omim_orpha,
         mask_size=len(mask),
+        holdout=holdout if inputs.drop_annotations else None,
         genes_rows_total=genes.rows_total,
         genes_rows_missing_symbol=genes.rows_missing_symbol,
     )
@@ -293,6 +307,7 @@ def _build_profile(
     omim_orpha: OmimOrphaMap | None,
     sources: _SourceContext,
     stats: _Stats,
+    holdout: frozenset[tuple[str, str]] = frozenset(),
 ) -> DiseaseProfile | None:
     counters: Counter[str] = Counter()
     positive_rows: dict[str, list[HpoaRow]] = defaultdict(list)
@@ -321,6 +336,9 @@ def _build_profile(
             elif row.frequency == EXCLUDED_FREQUENCY:
                 negative_rows[hpo_id].append(row)
                 negative_reasons[hpo_id].add("excluded_frequency")
+            elif held := _holdout_pair(holdout, disease_id, hpo_id, row.hpo_id):
+                stats.rows["annotation_holdout_dropped"] += 1
+                stats.holdout_matched.add(held)
             else:
                 positive_rows[hpo_id].append(row)
         elif row.aspect == "I":
@@ -602,6 +620,17 @@ def _disease_gene(
     )
 
 
+def _holdout_pair(
+    holdout: frozenset[tuple[str, str]], disease_id: str, hpo_id: str, raw_hpo_id: str
+) -> tuple[str, str] | None:
+    """The listed pair a positive row matches, by its resolved or its original term id."""
+
+    for pair in ((disease_id, hpo_id), (disease_id, raw_hpo_id)):
+        if pair in holdout:
+            return pair
+    return None
+
+
 def _gene_profile_link(disease_id: str, symbol: str) -> GeneDiseaseLink:
     """A link known only from gene profiles (Orphanet or ClinGen, not HPO)."""
 
@@ -655,6 +684,7 @@ def _input_records(
         ("omim_orpha_map", inputs.omim_orpha_map, omim_orpha.version if omim_orpha else None),
         ("exclude_pmids", inputs.exclude_pmids, None),
         ("gene_profiles", inputs.gene_profiles, None),
+        ("drop_annotations", inputs.drop_annotations, None),
     ]
     return {
         name: {
@@ -693,6 +723,7 @@ def _source_context(records: dict[str, dict[str, Any]]) -> _SourceContext:
         alignments=reference("omim_orpha_map", "Orphanet OMIM-ORPHA alignments", "CC-BY-4.0"),
         mask=reference("exclude_pmids", "held-out reference mask", None),
         gene_profiles=reference("gene_profiles", "gene profiles", None),
+        holdout=reference("drop_annotations", "annotation holdout", None),
     )
 
 
@@ -731,6 +762,7 @@ def _summary(
     input_records: dict[str, dict[str, Any]],
     omim_orpha: OmimOrphaMap | None,
     mask_size: int,
+    holdout: frozenset[tuple[str, str]] | None,
     genes_rows_total: int,
     genes_rows_missing_symbol: int,
 ) -> dict[str, Any]:
@@ -748,6 +780,21 @@ def _summary(
             "diseases_affected": len(stats.masked_diseases),
             "diseases_dropped_zero_positive": stats.diseases["dropped_zero_positive_due_to_mask"],
         },
+        "annotation_holdout": (
+            {
+                "enabled": True,
+                "pairs_listed": len(holdout),
+                "pairs_dropped": len(stats.holdout_matched),
+                "pairs_unmatched": len(holdout - stats.holdout_matched),
+                "rows_dropped": stats.rows["annotation_holdout_dropped"],
+                "diseases_affected": len({disease for disease, _ in stats.holdout_matched}),
+                "diseases_dropped_zero_positive": stats.diseases[
+                    "dropped_zero_positive_due_to_holdout"
+                ],
+            }
+            if holdout is not None
+            else {"enabled": False}
+        ),
         "rows": {
             **dict(sorted(stats.rows.items())),
             "by_aspect": dict(sorted(stats.rows_by_aspect.items())),

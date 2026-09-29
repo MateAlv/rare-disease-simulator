@@ -283,6 +283,14 @@ def build_profiles(
             dir_okay=False,
         ),
     ] = None,
+    drop_annotations: Annotated[
+        Path | None,
+        typer.Option(
+            "--drop-annotations",
+            help="TSV (disease_id, hpo_id) of positive annotations to hold out of the profiles.",
+            dir_okay=False,
+        ),
+    ] = None,
     summary: Annotated[
         Path | None,
         typer.Option(
@@ -338,6 +346,7 @@ def build_profiles(
                 exclude_pmids or sources.exclude_pmids_path, "PMID mask"
             ),
             gene_profiles=_optional_file(gene_profiles, "gene profiles"),
+            drop_annotations=_optional_file(drop_annotations, "annotation holdout"),
         )
         _build_profiles_from_hpoa(inputs, output or config.exports.profiles_path, summary)
         return
@@ -411,6 +420,14 @@ def _build_profiles_from_hpoa(
             f"Masked {masking['rows_masked']} HPOA row(s) across "
             f"{masking['diseases_affected']} disease(s); "
             f"{masking['diseases_dropped_zero_positive']} disease(s) left without phenotypes."
+        )
+    holdout = result.summary["annotation_holdout"]
+    if holdout["enabled"]:
+        typer.echo(
+            f"Held out {holdout['pairs_dropped']} of {holdout['pairs_listed']} listed "
+            f"annotation(s) ({holdout['rows_dropped']} row(s)) across "
+            f"{holdout['diseases_affected']} disease(s); "
+            f"{holdout['diseases_dropped_zero_positive']} disease(s) left without phenotypes."
         )
     typer.echo(f"Build summary: {summary_path}")
 

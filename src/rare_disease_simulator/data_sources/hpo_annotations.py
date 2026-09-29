@@ -172,6 +172,26 @@ def read_reference_mask(path: Path | str) -> frozenset[str]:
     return frozenset(references)
 
 
+def read_annotation_holdout(path: Path | str) -> frozenset[tuple[str, str]]:
+    """Read held-out (disease, term) annotations: a TSV with ``disease_id`` and ``hpo_id``."""
+
+    holdout_path = Path(path)
+    pairs: set[tuple[str, str]] = set()
+    with holdout_path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file, delimiter="\t")
+        if not {"disease_id", "hpo_id"} <= set(reader.fieldnames or ()):
+            raise ValueError(f"{holdout_path}: expected a header with disease_id and hpo_id")
+        for line_number, row in enumerate(reader, start=2):
+            disease_id = (row.get("disease_id") or "").strip()
+            hpo_id = (row.get("hpo_id") or "").strip()
+            if not disease_id and not hpo_id:
+                continue
+            if not disease_id or not hpo_id.startswith("HP:"):
+                raise ValueError(f"{holdout_path}:{line_number}: malformed row")
+            pairs.add((disease_id, hpo_id))
+    return frozenset(pairs)
+
+
 def _clean(value: str | None) -> str | None:
     stripped = (value or "").strip()
     return stripped or None
