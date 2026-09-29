@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,6 +19,17 @@ __all__ = ["Difficulty", "DifficultyPreset"]
 Sex = Literal["female", "male", "other", "unknown"]
 AgeUnit = Literal["days", "months", "years"]
 PhenotypeObservationStatus = Literal["positive", "negative", "missing", "unknown", "noise"]
+SexPriorKey = Literal[
+    "male_limited",
+    "female_limited",
+    "male_biased",
+    "female_biased",
+    "x_linked_dominant",
+    "unbiased",
+]
+NegativeSource = Literal["own_disease", "own_gene_other_disease", "confounder", "not_annotation"]
+OwnDiseasePool = Literal["profile", "entity"]
+UnfilledSlots = Literal["drop", "redistribute"]
 
 
 class StrictBaseModel(BaseModel):
@@ -42,6 +53,11 @@ class CaseTarget(StrictBaseModel):
     gene: str
     gene_label: int | None = None
     disease_label: int | None = None
+    entity_id: str | None = Field(
+        default=None,
+        description="Gene-first mode: the disease entity drawn for the gene; "
+        "disease_id is the profile drawn within it.",
+    )
 
 
 class PatientAttributes(StrictBaseModel):
@@ -81,6 +97,12 @@ class GeneratorMetadata(StrictBaseModel):
     simulator_version: str
     config_hash: str
     seed: int
+    case_seed: int | None = Field(
+        default=None, description="Seed of this case's RNG, derived from the run seed and case key."
+    )
+    sex_prior_key: SexPriorKey | None = Field(
+        default=None, description="Sex prior the case was drawn from (sex.p_male key)."
+    )
     difficulty: Difficulty
     generated_at: datetime | None = Field(
         default=None,
@@ -103,16 +125,6 @@ class SyntheticCase(StrictBaseModel):
     noise_phenotypes: list[CasePhenotype] = Field(default_factory=list)
     metadata: GeneratorMetadata
 
-
-SexPriorKey = Literal[
-    "male_limited",
-    "female_limited",
-    "male_biased",
-    "female_biased",
-    "x_linked_dominant",
-    "unbiased",
-]
-NegativeSource = Literal["own_disease", "confounder", "not_annotation"]
 
 DEFAULT_P_MALE: dict[SexPriorKey, float] = {
     "male_limited": 1.0,
@@ -234,6 +246,9 @@ class NegativeSettings(StrictBaseModel):
     real case reports mostly list the true syndrome's typical signs a patient
     lacks (diagnostic.ar-training EXP-B-001, Addendum 1). The defaults are not
     fitted to any cohort; calibrate them on R1-train only.
+
+    ``own_gene_other_disease`` (the gene's other diseases) only exists in
+    gene-first mode; disease-first runs leave it out of the slot draw.
     """
 
     max_per_case: int = Field(default=15, ge=0)
@@ -245,10 +260,23 @@ class NegativeSettings(StrictBaseModel):
     source_weights: dict[NegativeSource, float] = Field(
         default_factory=lambda: {
             "own_disease": 0.7,
+            "own_gene_other_disease": 0.1,
             "confounder": 0.2,
             "not_annotation": 0.1,
         },
         description="Relative odds of each source per negative slot; 0 disables a source.",
+    )
+    own_disease_pool: OwnDiseasePool = Field(
+        default="entity",
+        description="Gene-first mode: 'entity' also offers the terms of the entity's other "
+        "(equivalent OMIM/ORPHA) profiles as own-disease negatives; 'profile' only the "
+        "drawn profile's terms.",
+    )
+    unfilled_slots: UnfilledSlots = Field(
+        default="drop",
+        description="A slot whose source has no admissible term left: 'drop' leaves it empty "
+        "(the mix follows the weights, the count falls short); 'redistribute' refills it from "
+        "the sources that still have terms, by weight (the count follows the draw).",
     )
     confounders_top_n: int = Field(default=10, ge=0)
     min_information_content: float = Field(
@@ -260,7 +288,7 @@ class NegativeSettings(StrictBaseModel):
     @field_validator("source_weights")
     @classmethod
     def _complete_weights(cls, value: dict[str, float]) -> dict[str, float]:
-        merged = {source: 0.0 for source in ("own_disease", "confounder", "not_annotation")}
+        merged = {source: 0.0 for source in get_args(NegativeSource)}
         merged.update(value)
         if any(weight < 0.0 for weight in merged.values()):
             raise ValueError("source_weights must be non-negative")

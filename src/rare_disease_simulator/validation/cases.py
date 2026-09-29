@@ -64,6 +64,7 @@ MAX_EXAMPLES = 20
 class _Accumulator:
     cases: int = 0
     diseases: Counter[str] = field(default_factory=Counter)
+    genes: Counter[str] = field(default_factory=Counter)
     difficulties: Counter[str] = field(default_factory=Counter)
     config_hashes: Counter[str] = field(default_factory=Counter)
     bucket_counts: dict[str, list[int]] = field(default_factory=lambda: defaultdict(list))
@@ -112,6 +113,7 @@ def validate_cases(
     return {
         "cases": acc.cases,
         "diseases": len(acc.diseases),
+        "genes": len(acc.genes),
         "difficulties": dict(sorted(acc.difficulties.items())),
         "config_hashes": dict(sorted(acc.config_hashes.items())),
         "config_matches_cases": (
@@ -159,6 +161,7 @@ def _count_case(
 ) -> None:
     acc.cases += 1
     acc.diseases[case.target.disease_id] += 1
+    acc.genes[case.target.gene] += 1
     acc.difficulties[case.metadata.difficulty] += 1
     acc.config_hashes[case.metadata.config_hash] += 1
     for bucket in BUCKETS:
@@ -173,8 +176,11 @@ def _count_case(
 
     patient = case.patient
     acc.sex[patient.sex] += 1
-    if profile is not None:
-        acc.sex_by_prior[sex_prior_key(profile)][patient.sex] += 1
+    prior_key = case.metadata.sex_prior_key or (
+        sex_prior_key(profile) if profile is not None else None
+    )
+    if prior_key is not None:
+        acc.sex_by_prior[prior_key][patient.sex] += 1
     if patient.age is not None:
         acc.ages.append(patient.age.value)
     if patient.age_of_onset is not None:
@@ -221,6 +227,12 @@ def _check_case(
                 closures[profile.disease_id] = closure
             if negative.hpo_id in closure:
                 acc.violation("confounder_negative_annotated_to_disease", case_id, negative.hpo_id)
+        if (
+            negative.simulated_origin == "negative_own_gene_other_disease"
+            and profile is not None
+            and any(p.hpo_id == negative.hpo_id for p in profile.phenotypes)
+        ):
+            acc.violation("gene_other_negative_annotated_to_profile", case_id, negative.hpo_id)
 
     patient = case.patient
     if (
@@ -476,7 +488,10 @@ def _share(part: int, total: int) -> float | None:
 def format_report(report: Mapping[str, Any]) -> str:
     """Readable text rendering of :func:`validate_cases` output."""
 
-    lines = [f"Cases: {report['cases']} across {report['diseases']} disease(s)"]
+    lines = [
+        f"Cases: {report['cases']} across {report['diseases']} disease(s) "
+        f"and {report['genes']} gene(s)"
+    ]
     if report["config_matches_cases"] is False:
         lines.append("WARNING: the config hash differs from the cases' config hash")
     per_case = report["phenotypes_per_case"]
