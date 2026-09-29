@@ -1,0 +1,53 @@
+"""Optional file inputs for the simulator: noise vocabulary and label maps."""
+
+from __future__ import annotations
+
+import csv
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from rare_disease_simulator.data_sources.hpo import HpoOntology
+from rare_disease_simulator.simulation.simulator import NoiseTerm
+
+
+@dataclass(frozen=True)
+class LabelMaps:
+    """Integer class labels for genes and diseases."""
+
+    genes: dict[str, int] = field(default_factory=dict)
+    diseases: dict[str, int] = field(default_factory=dict)
+
+
+def load_noise_vocabulary(
+    path: Path | str, ontology: HpoOntology | None = None
+) -> list[NoiseTerm]:
+    """Read a TSV with an ``hpo_id`` column and an optional ``label`` column.
+
+    Blank labels are filled from the ontology when one is given.
+    """
+
+    terms: list[NoiseTerm] = []
+    with Path(path).open("r", encoding="utf-8", newline="") as file:
+        for row in csv.DictReader(file, delimiter="\t"):
+            hpo_id = (row.get("hpo_id") or "").strip()
+            if not hpo_id:
+                continue
+            label = (row.get("label") or "").strip()
+            if not label and ontology is not None:
+                label = ontology.get_label(hpo_id) or ""
+            terms.append(NoiseTerm(hpo_id=hpo_id, label=label or hpo_id))
+    return terms
+
+
+def load_label_maps(path: Path | str) -> LabelMaps:
+    """Read ``{"genes": {symbol: int}, "diseases": {disease_id: int}}`` (both optional)."""
+
+    with Path(path).open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a JSON object with 'genes' and/or 'diseases'")
+    return LabelMaps(
+        genes={str(key): int(value) for key, value in (data.get("genes") or {}).items()},
+        diseases={str(key): int(value) for key, value in (data.get("diseases") or {}).items()},
+    )
