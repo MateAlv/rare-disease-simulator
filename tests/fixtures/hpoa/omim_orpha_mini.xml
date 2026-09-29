@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<JDBOR date="2022-11-28 07:29:59" version="fixture">
+  <DisorderList count="3">
+    <Disorder id="1">
+      <OrphaCode>2002</OrphaCode>
+      <ExternalReferenceList count="2">
+        <ExternalReference id="x"><Source>OMIM</Source><Reference>100002</Reference><DisorderMappingRelation id="r"><Name lang="en">E (Exact mapping: the two concepts are equivalent)</Name></DisorderMappingRelation><DisorderMappingICDRelation/><DisorderMappingValidationStatus id="v"><Name lang="en">Validated</Name></DisorderMappingValidationStatus></ExternalReference>
+        <ExternalReference id="x"><Source>ICD-10</Source><Reference>Q99.9</Reference><DisorderMappingRelation id="r"><Name lang="en">E (Exact mapping: the two concepts are equivalent)</Name></DisorderMappingRelation><DisorderMappingICDRelation/><DisorderMappingValidationStatus id="v"><Name lang="en">Validated</Name></DisorderMappingValidationStatus></ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+    <Disorder id="2">
+      <OrphaCode>3001</OrphaCode>
+      <ExternalReferenceList count="1">
+        <ExternalReference id="x"><Source>OMIM</Source><Reference>100099</Reference><DisorderMappingRelation id="r"><Name lang="en">NTBT (ORPHA code's Narrower Term maps to a Broader Term)</Name></DisorderMappingRelation><DisorderMappingICDRelation/><DisorderMappingValidationStatus id="v"><Name lang="en">Validated</Name></DisorderMappingValidationStatus></ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+    <Disorder id="3">
+      <OrphaCode>5000</OrphaCode>
+      <ExternalReferenceList count="1">
+        <ExternalReference id="x"><Source>OMIM</Source><Reference>100001</Reference><DisorderMappingRelation id="r"><Name lang="en">E (Exact mapping: the two concepts are equivalent)</Name></DisorderMappingRelation><DisorderMappingICDRelation/><DisorderMappingValidationStatus id="v"><Name lang="en">Not yet validated</Name></DisorderMappingValidationStatus></ExternalReference>
+      </ExternalReferenceList>
+    </Disorder>
+  </DisorderList>
+</JDBOR>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JDBOR date="2025-12-09 07:10:28" version="fixture">
+  <DisorderList count="3">
+    <Disorder id="1">
+      <OrphaCode>2002</OrphaCode>
+      <Name lang="en">Beta X-linked syndrome</Name>
+      <AverageAgeOfOnsetList count="2">
+        <AverageAgeOfOnset id="23540"><Name lang="en">Adult</Name></AverageAgeOfOnset>
+        <AverageAgeOfOnset id="23543"><Name lang="en">Elderly</Name></AverageAgeOfOnset>
+      </AverageAgeOfOnsetList>
+    </Disorder>
+    <Disorder id="2">
+      <OrphaCode>3001</OrphaCode>
+      <Name lang="en">Gamma disease</Name>
+      <AverageAgeOfOnsetList count="2">
+        <AverageAgeOfOnset id="23522"><Name lang="en">Infancy</Name></AverageAgeOfOnset>
+        <AverageAgeOfOnset id="23515"><Name lang="en">Neonatal</Name></AverageAgeOfOnset>
+      </AverageAgeOfOnsetList>
+    </Disorder>
+    <Disorder id="3">
+      <OrphaCode>4000</OrphaCode>
+      <Name lang="en">No data disease</Name>
+      <AverageAgeOfOnsetList count="1">
+        <AverageAgeOfOnset id="409970"><Name lang="en">No data available</Name></AverageAgeOfOnset>
+      </AverageAgeOfOnsetList>
+    </Disorder>
+  </DisorderList>
+</JDBOR>
