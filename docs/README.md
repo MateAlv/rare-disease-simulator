@@ -122,6 +122,79 @@ Useful references:
 - [GA4GH Phenopackets](https://www.ga4gh.org/product/phenopackets/) defines a standard for computable clinical and phenotypic case representation.
 - [Phenopacket Store](https://monarch-initiative.github.io/phenopacket-store/collections/) can be used later to inspect and calibrate realistic case structure.
 
+## HPOA Structured Backbone
+
+`build-profiles --from-hpoa` builds one `DiseaseProfile` per OMIM/ORPHA/DECIPHER disease in `phenotype.hpoa` that has at least one gene in `genes_to_disease.txt`. It uses no LLM. Code: `profiles/hpoa_builder.py`.
+
+### Inputs
+
+| Option | File | Required |
+| --- | --- | --- |
+| `--hpo-json` | HPO `hp.json` (same release as the annotations) | yes |
+| `--hpoa` | HPO `phenotype.hpoa` | yes |
+| `--genes-to-disease` | HPO `genes_to_disease.txt` | yes |
+| `--orphanet-ages` | Orphanet `en_product9_ages.xml` (age-of-onset fallback) | no |
+| `--omim-orpha-map` | Orphanet `en_product1` alignments XML (lets OMIM diseases use the Orphanet fallback) | no |
+| `--exclude-pmids` | held-out references, one `PMID:n` (or bare `n`) per line | no, but see below |
+
+Any option not given falls back to `sources.*` in the config.
+
+```bash
+rare-disease-simulator build-profiles --from-hpoa \
+  --hpo-json data/raw/hpo/hp.json \
+  --hpoa data/raw/hpo/phenotype.hpoa \
+  --genes-to-disease data/raw/hpo/genes_to_disease.txt \
+  --orphanet-ages data/raw/orphadata/en_product9_ages.xml \
+  --exclude-pmids ../diagnostic.ar-training/data/splits/r1-v1.heldout-pmids.txt \
+  --output outputs/profiles.jsonl
+```
+
+The command writes `profiles.jsonl` and `profiles.summary.json` (`--summary` overrides the path). The summary holds:
+
+- counts of diseases, genes, phenotypes, negatives, onset sources, inheritance terms and sex bias;
+- masking effects;
+- each input's path, version and sha256;
+- the simulator's git SHA;
+- the output's sha256.
+
+Identical inputs produce a byte-identical `profiles.jsonl`.
+
+### Masking rule
+
+With `--exclude-pmids`, the builder drops every HPOA row whose `reference` column (`;`-separated) cites a listed reference. This happens before any other processing and covers all aspects. These publications describe evaluation patients, so their annotations must not reach the simulator.
+
+The summary reports:
+
+- rows dropped;
+- diseases affected;
+- diseases left with no positive phenotype, which are excluded from the output.
+
+Building without a mask is allowed, but it prints a warning.
+
+### Mapping
+
+- **Terms.** Alternative and obsolete HPO IDs are resolved through `hp.json` (`hasAlternativeId`, `replaced_by`). Rows that still cannot be resolved are dropped and counted.
+- **Genes.** Symbol, NCBI id and association type (`MENDELIAN` → `causal`, `POLYGENIC` → `susceptibility`, otherwise `unknown`). Rows with symbol `-` are skipped.
+- **Positive phenotypes (aspect `P`).** Frequency terms HP:0040280–HP:0040284 map to their HPO-defined ranges (100%, 80–99%, 30–79%, 5–29%, 1–4%). `n/m` and `x%` become point estimates. An empty frequency stays `unknown`, with no range; it never means "always". `frequency_raw` keeps the source value.
+- **Duplicate rows of the same (disease, term).** `n/m` counts are pooled (sum n / sum m). Without counts, percentages are averaged. Otherwise, the envelope of the frequency-term ranges is used. References are unioned.
+- **Negative phenotypes.** A `P` row becomes a negative phenotype if it has the `NOT` qualifier, the `Excluded` frequency (HP:0040285), or a pooled frequency of `0/m`. If a term has both positive and negative evidence, it stays positive; the conflict is counted in `quality.counters`.
+- **Phenotype onset.** The per-row `onset` becomes the phenotype's `onset` and `onset_hpo_id`. When rows disagree, the earliest onset wins.
+- **Sex restriction.** The per-row `sex` becomes `sex_restriction` (`male`/`female`), but only when every row for that term names the same sex.
+- **Disease age of onset.** Aspect `C` terms under Onset (HP:0003674) become `age_of_onset`:
+  - `distribution` holds the share of the disease's onset terms in each category;
+  - `category` is the most supported category, with ties going to the earliest;
+  - `hpo_ids` lists the terms;
+  - Congenital onset maps to `neonatal`.
+- **Orphanet fallback.** Without an HPOA onset, `AverageAgeOfOnset` is used (Infancy → infantile, Adolescent → juvenile, Elderly → adult, All ages → variable). ORPHA diseases match directly. OMIM diseases match only through exact, validated alignments in `--omim-orpha-map`.
+- **Progression.** Aspect `C` pace-of-progression terms set `progression`.
+- **Inheritance (aspect `I`).** Modes of inheritance go on every gene of the disease (`inheritance` labels, `inheritance_hpo_ids`).
+- **Sex bias.** It is derived only from inheritance, and only where the genetics imply it:
+  - male-limited or female-limited expression → that sex;
+  - all Mendelian modes X-linked recessive or Y-linked → `male`;
+  - all Mendelian modes autosomal → `none`;
+  - anything else (X-linked dominant or unspecified, mitochondrial, mixed) is left unset.
+- **Other aspects.** Aspects `H` and `M` are not used yet; they are counted in the summary.
+
 ## LLM Extraction Policy
 
 The LLM produces `DiseaseProfilePatch` objects, never synthetic patients.
@@ -407,7 +480,7 @@ The MVP uses public biomedical sources only. It does not ingest private patient 
 ```bash
 rare-disease-simulator fetch-sources
 rare-disease-simulator extract-profile-patches --disease ORPHA:123
-rare-disease-simulator build-profiles
+rare-disease-simulator build-profiles --from-hpoa --exclude-pmids heldout-pmids.txt
 rare-disease-simulator simulate --profiles data/profiles/profiles.jsonl --cases-per-disease 300
 rare-disease-simulator export-graphens --cases outputs/rich_cases.jsonl
 rare-disease-simulator validate
