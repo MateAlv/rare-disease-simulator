@@ -155,6 +155,7 @@ class _SourceContext:
     ontology: SourceReference
     genes: SourceReference
     orphanet: SourceReference | None
+    alignments: SourceReference | None
     mask: SourceReference | None
 
     def base_provenance(self) -> list[Provenance]:
@@ -254,6 +255,7 @@ def build_profiles_from_hpoa(
         stats,
         profiles,
         input_records=input_records,
+        omim_orpha=omim_orpha,
         mask_size=len(mask),
         genes_rows_total=genes.rows_total,
         genes_rows_missing_symbol=genes.rows_missing_symbol,
@@ -498,13 +500,21 @@ def _age_of_onset(
     evidence = "Orphanet AverageAgeOfOnset: " + "; ".join(
         f"{label} ({orpha_id})" for orpha_id, label in labels
     )
+    provenance = [Provenance(source=sources.orphanet, field="age_of_onset", evidence=evidence)]
+    if via == "orphanet_via_omim" and sources.alignments is not None:
+        provenance.append(
+            Provenance(
+                source=sources.alignments,
+                field="age_of_onset",
+                evidence="exact validated OMIM-ORPHA alignment: "
+                + ", ".join(sorted({orpha_id for orpha_id, _ in labels})),
+            )
+        )
     return (
         AgeOfOnset(
             category=_modal_category(categories),
             distribution=_distribution(categories),
-            provenance=[
-                Provenance(source=sources.orphanet, field="age_of_onset", evidence=evidence)
-            ],
+            provenance=provenance,
         ),
         via,
     )
@@ -672,6 +682,7 @@ def _source_context(records: dict[str, dict[str, Any]]) -> _SourceContext:
         ontology=ontology,
         genes=genes,
         orphanet=reference("orphanet_ages", "Orphanet average age of onset", "CC-BY-4.0"),
+        alignments=reference("omim_orpha_map", "Orphanet OMIM-ORPHA alignments", "CC-BY-4.0"),
         mask=reference("exclude_pmids", "held-out reference mask", None),
     )
 
@@ -709,6 +720,7 @@ def _summary(
     profiles: Sequence[DiseaseProfile],
     *,
     input_records: dict[str, dict[str, Any]],
+    omim_orpha: OmimOrphaMap | None,
     mask_size: int,
     genes_rows_total: int,
     genes_rows_missing_symbol: int,
@@ -716,6 +728,7 @@ def _summary(
     built = len(profiles)
     rows_total = stats.rows["total"]
     with_onset = built - stats.onset_sources["none"]
+    via_mapping = stats.onset_sources["orphanet_via_omim"]
     return {
         "inputs": input_records,
         "masking": {
@@ -751,6 +764,10 @@ def _summary(
         "age_of_onset": {
             "diseases_with_onset": with_onset,
             "fraction_with_onset": _round(with_onset / built) if built else 0,
+            "gained_via_omim_mapping": via_mapping,
+            "fraction_with_onset_without_mapping": (
+                _round((with_onset - via_mapping) / built) if built else 0
+            ),
             "by_source": dict(sorted(stats.onset_sources.items())),
             "by_category": dict(sorted(stats.onset_categories.items())),
         },
@@ -762,4 +779,5 @@ def _summary(
         },
         "sex_bias": dict(sorted(stats.sex_bias.items())),
         "progression": dict(sorted(stats.progression.items())),
+        "omim_orpha_map": omim_orpha.stats if omim_orpha else None,
     }

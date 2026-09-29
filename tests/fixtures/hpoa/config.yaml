@@ -1,0 +1,12 @@
+# Test configuration: every source is a fixture, and no optional input is set
+# unless a test passes it on the command line.
+mvp:
+  diseases: []
+
+sources:
+  hpo_json_path: tests/fixtures/hpoa/hp_mini.json
+  phenotype_annotation_path: tests/fixtures/hpoa/phenotype_mini.hpoa
+  genes_to_disease_path: tests/fixtures/hpoa/genes_to_disease_mini.txt
+  orphanet_ages_path: null
+  omim_orpha_map_path: null
+  exclude_pmids_path: null

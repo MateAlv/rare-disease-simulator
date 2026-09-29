@@ -10,12 +10,14 @@ from rare_disease_simulator.simulation.schema import SyntheticCase
 from tests.fixtures.readers import fixture_path
 
 FIXTURES = fixture_path("hpoa")
+CONFIG = ("--config", str(FIXTURES / "config.yaml"))
 
 
 def _build(output: Path, *extra: str):
     return CliRunner().invoke(
         app,
         [
+            *CONFIG,
             "build-profiles",
             "--from-hpoa",
             "--hpo-json",
@@ -82,6 +84,7 @@ def test_build_profiles_from_hpoa_rejects_missing_inputs(tmp_path: Path) -> None
     result = CliRunner().invoke(
         app,
         [
+            *CONFIG,
             "build-profiles",
             "--from-hpoa",
             "--hpo-json",
@@ -103,6 +106,7 @@ def test_simulate_passes_ontology_noise_vocabulary_and_labels(tmp_path: Path) ->
     result = CliRunner().invoke(
         app,
         [
+            *CONFIG,
             "simulate",
             "--profiles",
             str(profiles),
@@ -132,3 +136,22 @@ def test_simulate_passes_ontology_noise_vocabulary_and_labels(tmp_path: Path) ->
     assert any(
         term.reason == "generalized" for case in cases for term in case.positive_phenotypes
     )
+
+
+def test_build_profiles_reports_the_omim_orpha_mapping(tmp_path: Path) -> None:
+    output = tmp_path / "profiles.jsonl"
+
+    result = _build(
+        output,
+        "--exclude-pmids",
+        str(FIXTURES / "heldout_pmids.txt"),
+        "--omim-orpha-map",
+        str(FIXTURES / "en_product1_mini.xml"),
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "profiles.summary.json").read_text(encoding="utf-8"))
+    assert summary["inputs"]["omim_orpha_map"]["version"] == "2026-06-23 07:53:50"
+    assert summary["omim_orpha_map"]["omim_E_validated"] == 2
+    assert summary["age_of_onset"]["gained_via_omim_mapping"] == 1
+    assert "Onset coverage: 3/4 disease(s), 1 via OMIM-ORPHA mapping" in result.output

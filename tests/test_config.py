@@ -27,3 +27,17 @@ def test_load_mvp_config_outputs() -> None:
     assert config.simulation.difficulties == ["easy", "medium", "hard"]
     assert config.llm.provider == "dummy"
 
+
+
+def test_mvp_config_builds_from_pinned_orphanet_2026_06_with_the_r1_mask() -> None:
+    sources = load_config(Path("configs/mvp.yaml")).sources
+
+    assert sources.orphanet_ages_path == Path(
+        "../diagnostic.ar-training/data/raw/orphanet_ages_2026_06/en_product9_ages.xml"
+    )
+    assert sources.omim_orpha_map_path == Path(
+        "../diagnostic.ar-training/data/raw/orphanet_alignments/en_product1.xml"
+    )
+    assert sources.exclude_pmids_path == Path(
+        "../diagnostic.ar-training/data/splits/r1-v1.heldout-pmids.txt"
+    )

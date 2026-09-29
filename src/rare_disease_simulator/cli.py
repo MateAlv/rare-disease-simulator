@@ -254,7 +254,7 @@ def build_profiles(
         Path | None,
         typer.Option(
             "--omim-orpha-map",
-            help="Orphanet en_product1 alignments XML (OMIM -> ORPHA onset fallback).",
+            help="Orphanet en_product1.xml; exact validated OMIM-ORPHA alignments carry onset.",
             dir_okay=False,
         ),
     ] = None,
@@ -382,6 +382,11 @@ def _build_profiles_from_hpoa(
         f"Phenotype annotations: {phenotypes['annotations']}, "
         f"negatives: {result.summary['negatives'].get('annotations', 0)}, "
         f"genes: {result.summary['genes']['unique_symbols']}"
+    )
+    onset = result.summary["age_of_onset"]
+    typer.echo(
+        f"Onset coverage: {onset['diseases_with_onset']}/{written} disease(s), "
+        f"{onset['gained_via_omim_mapping']} via OMIM-ORPHA mapping"
     )
     if masking["enabled"]:
         typer.echo(
