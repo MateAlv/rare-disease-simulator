@@ -440,3 +440,21 @@ def test_a_disease_only_one_sex_can_present_forces_that_sex(ontology) -> None:
 
     assert {case.patient.sex for case in cases} == {"female"}
     assert all(case.positive_phenotypes for case in cases)
+
+
+def test_generalization_never_lands_on_a_term_restricted_to_the_other_sex(ontology) -> None:
+    # Seizure generalizes to its parent, which this profile restricts to females.
+    profile = _profile(
+        "OMIM:8",
+        [_phenotype("HP:0001250", 1.0), _phenotype("HP:0000707", 0.0, sex_restriction="female")],
+    )
+    config = _config(
+        difficulties=["easy"],
+        cases_per_disease_per_difficulty=20,
+        presets={"easy": _preset(ontology_smoothing_rate=1.0)},
+        sex={"p_male": {"unbiased": 1.0}},
+    )
+
+    for case in simulate_cases(profile, config, ontology=ontology):
+        assert case.patient.sex == "male"
+        assert "HP:0000707" not in [p.hpo_id for p in case.positive_phenotypes]
