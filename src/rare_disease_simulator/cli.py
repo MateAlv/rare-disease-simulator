@@ -49,7 +49,9 @@ from rare_disease_simulator.profiles.builder import (
     build_profiles_from_fixtures,
     write_profiles_jsonl,
 )
+from rare_disease_simulator.profiles.frequency import pooled_counts
 from rare_disease_simulator.profiles.hpoa_builder import HpoaBuildInputs, build_profiles_from_hpoa
+from rare_disease_simulator.profiles.merge import MergeStats, merge_entity_profiles
 from rare_disease_simulator.profiles.schema import DiseaseProfile
 from rare_disease_simulator.simulation.calibration import (
     CalibrationError,
@@ -59,6 +61,14 @@ from rare_disease_simulator.simulation.calibration import (
 )
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
+from rare_disease_simulator.simulation.reporting import (
+    CardinalIndex,
+    Reporting,
+    ReportingArtifactError,
+    ReportModel,
+    load_cardinal,
+    load_report_model,
+)
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
 from rare_disease_simulator.simulation.simulator import (
@@ -565,6 +575,24 @@ def simulate(
             dir_okay=False,
         ),
     ] = None,
+    report_model: Annotated[
+        Path | None,
+        typer.Option(
+            "--report-model",
+            help="report-model-v1 JSON (term budget and reporting model; default: "
+            "sources.report_model_path). Needed when reporting.mode is report_model.",
+            dir_okay=False,
+        ),
+    ] = None,
+    cardinal: Annotated[
+        Path | None,
+        typer.Option(
+            "--cardinal",
+            help="cardinal-v1 TSV (disease_id, hpo_id, kind, source; default: "
+            "sources.cardinal_path). Needed when reporting.force_cardinal is true.",
+            dir_okay=False,
+        ),
+    ] = None,
     difficulty: Annotated[
         list[str] | None,
         typer.Option("--difficulty", help="Override the difficulties (repeatable)."),
@@ -648,6 +676,10 @@ def simulate(
     label_maps = load_label_maps(_required_file(labels, "labels")) if labels else None
 
     profile_records = read_model_jsonl(profiles_path, DiseaseProfile)
+    _check_count_estimator(sim_config, profile_records)
+    reporting, reporting_inputs = _load_reporting(
+        config, sim_config, report_model, cardinal, ontology, profile_records
+    )
     confounders = ConfounderIndex(
         profile_records,
         ontology,
@@ -663,9 +695,11 @@ def simulate(
         "labels": _input_record(labels) if labels else None,
         "disease_ids": _input_record(disease_ids) if disease_ids else None,
         "calibration": _input_record(calibration) if calibration else None,
+        **reporting_inputs,
     }
 
     plan = None
+    profile_map = {profile.disease_id: profile for profile in profile_records}
     targets = profile_records
     strata: dict[str, int] | None = None
     if gene_first:
@@ -692,9 +726,9 @@ def simulate(
         "confounders": confounders,
         "sex_terms": sex_terms,
         "source_versions": source_versions,
+        "reporting": reporting,
     }
     if plan is not None:
-        profile_map = {profile.disease_id: profile for profile in profile_records}
         cases: Iterable[SyntheticCase] = (
             case
             for target in plan.targets
@@ -735,6 +769,16 @@ def simulate(
             "strata": strata,
         },
         "genes": {**plan.summary(), "requested": genes or "all"} if plan is not None else None,
+        "entity_profiles": (
+            _merge_summary(plan, profile_map, ontology)
+            if plan is not None and sim_config.entity_profiles == "merged"
+            else None
+        ),
+        "reporting": (
+            {"mode": sim_config.reporting.mode, **reporting.summary()}
+            if reporting is not None
+            else {"mode": sim_config.reporting.mode}
+        ),
         "output": {
             "cases_path": str(output_path),
             "cases_written": written,
@@ -763,6 +807,112 @@ def simulate(
         )
     typer.echo(f"Wrote rich cases to {output_path}")
     typer.echo(f"Run summary: {summary_path}")
+
+
+def _check_count_estimator(config: SimulationConfig, profiles: list[DiseaseProfile]) -> None:
+    settings = config.frequency
+    if settings.count_estimator != "beta_shrinkage" or settings.shrinkage_mean is not None:
+        return
+    counted = sum(
+        1
+        for profile in profiles
+        for phenotype in profile.phenotypes
+        if pooled_counts(phenotype.frequency_raw) is not None
+    )
+    if counted:
+        raise typer.BadParameter(
+            f"{counted} profile term(s) are count-based and frequency.count_estimator is "
+            "beta_shrinkage, but frequency.shrinkage_mean is not set: give the median "
+            "count-based frequency of hpoa-recount-v1 (config or calibration key), or set "
+            "frequency.count_estimator: jeffreys for simulator 0.3 estimates"
+        )
+
+
+def _pinned_record(path: Path, pinned: str | None, from_config: bool, key: str) -> dict:
+    record = _input_record(path)
+    if from_config and pinned:
+        if record["sha256"] != pinned:
+            raise typer.BadParameter(
+                f"{path} has sha256 {record['sha256']}, not the pinned {pinned} ({key})"
+            )
+        record["sha256_verified_against"] = key
+    return record
+
+
+def _load_reporting(
+    config: AppConfig,
+    sim_config: SimulationConfig,
+    report_model: Path | None,
+    cardinal: Path | None,
+    ontology: HpoOntology | None,
+    profiles: list[DiseaseProfile],
+) -> tuple[Reporting | None, dict[str, dict[str, object] | None]]:
+    """Load report-model-v1 and cardinal-v1 when the emission mode needs them."""
+
+    sources = config.sources
+    if sim_config.reporting.mode != "report_model":
+        if report_model is not None or cardinal is not None:
+            raise typer.BadParameter(
+                "--report-model/--cardinal given but reporting.mode is observation"
+            )
+        return None, {}
+    model_path = report_model or sources.report_model_path
+    if model_path is None:
+        raise typer.BadParameter(
+            "reporting.mode is report_model: pass --report-model (report-model-v1) or set "
+            "sources.report_model_path, or set reporting.mode: observation"
+        )
+    cardinal_path = cardinal or sources.cardinal_path
+    if cardinal_path is None and sim_config.reporting.force_cardinal:
+        raise typer.BadParameter(
+            "reporting.force_cardinal needs --cardinal (cardinal-v1) or sources.cardinal_path; "
+            "set reporting.force_cardinal: false to report without cardinal terms"
+        )
+    model_record = _pinned_record(
+        _required_file(model_path, "report model"),
+        sources.report_model_sha256,
+        report_model is None,
+        "sources.report_model_sha256",
+    )
+    cardinal_record = (
+        _pinned_record(
+            _required_file(cardinal_path, "cardinal terms"),
+            sources.cardinal_sha256,
+            cardinal is None,
+            "sources.cardinal_sha256",
+        )
+        if cardinal_path is not None
+        else None
+    )
+    try:
+        model = load_report_model(model_path)
+        cardinal_index = load_cardinal(cardinal_path, ontology) if cardinal_path else None
+        reporting = Reporting.build(
+            model,
+            ontology=ontology,
+            profiles=profiles,
+            cardinal=cardinal_index,
+            unknown_frequency=sim_config.frequency.unknown_frequency,
+        )
+    except ReportingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    model_record["artifact_id"] = model.artifact_id
+    return reporting, {"report_model": model_record, "cardinal": cardinal_record}
+
+
+def _merge_summary(
+    plan: GenePlan, profiles: dict[str, DiseaseProfile], ontology: HpoOntology | None
+) -> dict[str, int]:
+    """What merging did over the plan's entities (run summary ``entity_profiles``)."""
+
+    total = MergeStats()
+    for target in plan.targets:
+        for entity in target.entities:
+            _, stats = merge_entity_profiles(
+                entity.entity, [profiles[pid] for pid in entity.profile_ids], ontology
+            )
+            total.add(stats)
+    return total.summary()
 
 
 def _gene_plan(
@@ -970,6 +1120,22 @@ def validate(
             dir_okay=False,
         ),
     ] = None,
+    report_model: Annotated[
+        Path | None,
+        typer.Option(
+            "--report-model",
+            help="report-model-v1 the cases used (default: the run summary's).",
+            dir_okay=False,
+        ),
+    ] = None,
+    cardinal: Annotated[
+        Path | None,
+        typer.Option(
+            "--cardinal",
+            help="cardinal-v1 the cases used (default: the run summary's).",
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Validate the config, a simulated case set, or an exported training dataset.
 
@@ -1024,6 +1190,9 @@ def validate(
         if noise_vocabulary is not None
         else None
     )
+    model, cardinal_index, artifact_inputs = _reporting_artifacts(
+        run_data, report_model, cardinal, ontology
+    )
 
     result = validate_cases(
         iter_model_jsonl(cases_path, SyntheticCase),
@@ -1031,6 +1200,8 @@ def validate(
         ontology=ontology,
         config=sim_config,
         noise_vocabulary=noise_ids,
+        report_model=model,
+        cardinal=cardinal_index,
     )
     result = {
         "config_source": config_source,
@@ -1039,6 +1210,7 @@ def validate(
             "profiles": _input_record(profiles) if profiles else None,
             "hp_json": _input_record(hpo_path, ontology.version) if ontology else None,
             "noise_vocabulary": _input_record(noise_vocabulary) if noise_vocabulary else None,
+            **artifact_inputs,
         },
         **result,
     }
@@ -1049,6 +1221,39 @@ def validate(
     typer.echo(f"Validation report: {report_path}")
     if result["violations"]["count"]:
         raise typer.Exit(code=1)
+
+
+def _reporting_artifacts(
+    run_data: dict | None,
+    report_model: Path | None,
+    cardinal: Path | None,
+    ontology: HpoOntology | None,
+) -> tuple[ReportModel | None, CardinalIndex | None, dict[str, dict[str, object] | None]]:
+    """The report model and cardinal terms to validate against: given, else the run's."""
+
+    recorded = (run_data or {}).get("inputs") or {}
+
+    def pick(given: Path | None, key: str) -> Path | None:
+        if given is not None:
+            return _required_file(given, key.replace("_", " "))
+        record = recorded.get(key)
+        return _required_file(Path(record["path"]), key.replace("_", " ")) if record else None
+
+    model_path = pick(report_model, "report_model")
+    cardinal_path = pick(cardinal, "cardinal")
+    try:
+        model = load_report_model(model_path) if model_path else None
+        cardinal_index = load_cardinal(cardinal_path, ontology) if cardinal_path else None
+    except ReportingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return (
+        model,
+        cardinal_index,
+        {
+            "report_model": _input_record(model_path) if model_path else None,
+            "cardinal": _input_record(cardinal_path) if cardinal_path else None,
+        },
+    )
 
 
 def _validate_dataset(
@@ -1173,12 +1378,15 @@ def export_training(
     profile_map = {
         profile.disease_id: profile for profile in iter_model_jsonl(profiles_path, DiseaseProfile)
     }
+    model, cardinal_index, _ = _reporting_artifacts(run_data, None, None, ontology)
     validation = validate_cases(
         iter_model_jsonl(cases_path, SyntheticCase),
         profiles=profile_map,
         ontology=ontology,
         config=sim_config,
         noise_vocabulary=noise_ids,
+        report_model=model,
+        cardinal=cardinal_index,
     )
     if validation["violations"]["count"]:
         typer.echo(format_report(validation))
@@ -1224,6 +1432,8 @@ def export_training(
             "profile_sources": run_data.get("profile_sources"),
         },
         "calibration": run_data.get("calibration"),
+        "entity_profiles": run_data.get("entity_profiles"),
+        "reporting": run_data.get("reporting"),
         "simulator": {
             "simulate": run_data["simulate"],
             "export_git": git,
@@ -1264,9 +1474,10 @@ def _validation_digest(report: dict) -> dict:
         "sex",
         "age",
         "onset",
+        "reporting",
         "violations",
     )
-    digest = {key: report[key] for key in keys}
+    digest = {key: report.get(key) for key in keys}
     calibration = report.get("calibration")
     if calibration is not None:
         digest["calibration"] = {

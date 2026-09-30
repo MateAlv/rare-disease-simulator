@@ -44,6 +44,10 @@ class SourcePathsConfig(BaseModel):
     gene_profiles_path: Path | None = None
     gene_profiles_sha256: str | None = None
     gnn_genes_path: Path | None = None
+    report_model_path: Path | None = None
+    report_model_sha256: str | None = None
+    cardinal_path: Path | None = None
+    cardinal_sha256: str | None = None
     negative_phenotype_annotation_path: Path = Path(
         "data/raw/hpo/negative_phenotype_annotation.tab"
     )
