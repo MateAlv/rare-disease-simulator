@@ -13,7 +13,10 @@ entity lists; those diseases get the gene-profile genes). Mapping rules (see ``d
   age of onset as fallback; ``C`` pace-of-progression rows set ``progression``;
 - rows citing a held-out reference are dropped before anything else;
 - listed (disease, term) positive annotations (an annotation holdout) are
-  dropped before profiles are built.
+  dropped before profiles are built;
+- a recounted file (``hpoa-recount-v1``, ADR-0011) reads like any HPOA file;
+  its recounted rows (reference ``R1-TRAIN:...``) are counted in the summary,
+  with how many carry a per-phenotype onset.
 
 Output is deterministic: diseases, genes and terms are emitted in sorted order
 and no timestamps are written into profiles.
@@ -74,6 +77,7 @@ from rare_disease_simulator.profiles.schema import (
 ONSET_ROOT = "HP:0003674"
 MODE_OF_INHERITANCE_ROOT = "HP:0000005"
 EXCLUDED_FREQUENCY = "HP:0040285"
+RECOUNT_REFERENCE_PREFIX = "R1-TRAIN:"
 
 # Checked in order; the first anchor the term is (a descendant of) wins, so the
 # specific pediatric anchors precede their parent "Pediatric onset".
@@ -242,6 +246,14 @@ def build_profiles_from_hpoa(
         if row.disease_id not in links:
             stats.rows["disease_without_gene"] += 1
             continue
+        if row.aspect == "P" and not row.negated:
+            stats.rows["phenotype_rows_used"] += 1
+            if row.onset:
+                stats.rows["phenotype_rows_used_with_onset"] += 1
+            if any(ref.startswith(RECOUNT_REFERENCE_PREFIX) for ref in row.references):
+                stats.rows["recounted"] += 1
+                if row.onset:
+                    stats.rows["recounted_with_onset"] += 1
         rows_by_disease[row.disease_id].append(row)
 
     stats.diseases["in_hpoa"] = len(names)

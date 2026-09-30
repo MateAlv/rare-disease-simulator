@@ -358,3 +358,23 @@ def test_orphanet_readers_keep_exact_validated_mappings_and_real_onsets() -> Non
         "omim_ids_mapped": 1,
         "omim_ids_with_several_orpha": 0,
     }
+
+
+def test_a_recounted_file_keeps_masked_diseases_with_their_recounts_and_onsets() -> None:
+    recount = build_profiles_from_hpoa(
+        _inputs(
+            phenotype_hpoa=fixture_path("v04") / "phenotype_recount_mini.hpoa",
+            exclude_pmids=None,
+        )
+    )
+
+    delta = _profile(recount, "OMIM:100004")
+    assert [p.hpo_id for p in delta.phenotypes] == ["HP:0001250"]
+    seizure = _phenotype(delta, "HP:0001250")
+    assert (seizure.frequency_raw, seizure.onset) == ("4/10", "infantile")
+    assert seizure.source == ["R1-TRAIN:r1-v1"]
+    eye = _phenotype(_profile(recount, "OMIM:100001"), "HP:0000478")
+    assert (eye.frequency_raw, eye.onset) == ("7/9", "childhood")
+    rows = recount.summary["rows"]
+    assert (rows["recounted"], rows["recounted_with_onset"]) == (2, 2)
+    assert rows["phenotype_rows_used_with_onset"] > rows["recounted_with_onset"]
