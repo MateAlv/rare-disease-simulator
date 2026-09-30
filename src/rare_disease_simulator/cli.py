@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -748,7 +749,8 @@ def simulate(
         )
 
     output_path = output or config.exports.rich_cases_path
-    written = write_jsonl(output_path, cases)
+    realized = _ReportedTotals()
+    written = write_jsonl(output_path, realized.track(cases))
     run_summary: dict[str, object] = {
         "simulate": {
             "mode": "gene_first" if gene_first else "disease_first",
@@ -775,7 +777,7 @@ def simulate(
             else None
         ),
         "reporting": (
-            {"mode": sim_config.reporting.mode, **reporting.summary()}
+            {"mode": sim_config.reporting.mode, **reporting.summary(), **realized.summary()}
             if reporting is not None
             else {"mode": sim_config.reporting.mode}
         ),
@@ -807,6 +809,39 @@ def simulate(
         )
     typer.echo(f"Wrote rich cases to {output_path}")
     typer.echo(f"Run summary: {summary_path}")
+
+
+class _ReportedTotals:
+    """Realized report budgets and reported terms of the cases as they are written."""
+
+    def __init__(self) -> None:
+        self.counts: Counter[str] = Counter()
+
+    def track(self, cases: Iterable[SyntheticCase]) -> Iterator[SyntheticCase]:
+        for case in cases:
+            if case.metadata.report_budget is not None:
+                self.counts["cases"] += 1
+                self.counts["budget"] += case.metadata.report_budget
+                self.counts["profile"] += len(case.positive_phenotypes)
+                self.counts["noise"] += len(case.noise_phenotypes)
+            yield case
+
+    def summary(self) -> dict[str, object]:
+        cases = self.counts["cases"]
+
+        def mean(key: str) -> float | None:
+            return round(self.counts[key] / cases, 4) if cases else None
+
+        return {
+            "budget_mean_drawn": mean("budget"),
+            "reported_total_mean": (
+                round((self.counts["profile"] + self.counts["noise"]) / cases, 4)
+                if cases
+                else None
+            ),
+            "reported_profile_mean": mean("profile"),
+            "reported_noise_mean": mean("noise"),
+        }
 
 
 def _check_count_estimator(config: SimulationConfig, profiles: list[DiseaseProfile]) -> None:

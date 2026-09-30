@@ -21,6 +21,7 @@ from rare_disease_simulator.simulation.schema import FrequencySettings, run_conf
 from rare_disease_simulator.simulation.simulator import (
     CARDINAL_REASON,
     MERGED_REASON,
+    NoiseTerm,
     ShrinkageMeanMissing,
     simulate_cases,
     simulate_gene_cases,
@@ -30,6 +31,7 @@ from rare_disease_simulator.validation.cases import validate_cases
 from tests.fixtures.readers import fixture_path
 from tests.test_gene_first import ALL_PROFILES, PROFILE_MAP, TARGET
 from tests.test_simulation_v02 import (
+    TERMS,
     TRUE,
     _phenotype,
     _profile,
@@ -113,6 +115,7 @@ def test_reported_terms_follow_budget_and_cardinal_rule(ontology) -> None:
     for case in cases:
         budget = case.metadata.report_budget
         assert budget in support
+        assert case.metadata.report_budget_profile == budget  # no noise vocabulary
         truth = _true_terms(case)
         cardinal = truth & CARDINAL.terms_for(case.target.profile_ids or [])
         assert _reported(case) == min(len(truth), max(budget, len(cardinal)))
@@ -141,6 +144,53 @@ def test_reported_count_follows_the_budget_when_truth_is_rich(ontology, tmp_path
     for k, expected in {1: 10 / 50, 2: 20 / 50, 3: 15 / 50, 4: 5 / 50}.items():
         assert counts[k] / len(cases) == pytest.approx(expected, abs=0.025)
     assert all(len(_true_terms(case)) == len(ids) for case in cases)
+
+
+def test_noise_takes_its_share_of_the_budget(ontology) -> None:
+    ids = ["HP:0001250", "HP:0001251", "HP:0001249", "HP:0000505", "HP:0000518",
+           "HP:0001629", "HP:0002650", "HP:0000988"]
+    rich = _profile("OMIM:7", [_phenotype(hpo_id, 1.0) for hpo_id in ids])
+    vocabulary = [
+        NoiseTerm(hpo_id, TERMS[hpo_id][0])
+        for hpo_id in ("HP:0000964", "HP:0001385", "HP:0007359", "HP:0000008", "HP:0000028",
+                       "HP:0000047")
+    ]
+    config = _config(
+        difficulties=["easy"], cases_per_disease_per_difficulty=4000,
+        missingness={"sex_unknown": 0.0, "age_unknown": 0.0, "onset_unknown": 0.0,
+                     "no_negatives": 1.0},
+        presets={"easy": {**_config().presets["easy"].model_dump(),
+                          "ontology_smoothing_rate": 0.0, "noise_mean": 0.3,
+                          "negatives_mean": 0.0}},
+    )
+    reporting = _reporting(ontology, cardinal=None)
+
+    cases = simulate_cases(
+        rich, config, ontology=ontology, reporting=reporting, noise_vocabulary=vocabulary
+    )
+
+    totals: Counter[int] = Counter()
+    for case in cases:
+        k, noise = case.metadata.report_budget, len(case.noise_phenotypes)
+        assert case.metadata.report_budget_profile == max(1, k - noise)
+        assert len(case.positive_phenotypes) == max(1, k - noise)
+        totals[len(case.positive_phenotypes) + noise] += 1
+    assert any(case.noise_phenotypes for case in cases)
+    shares = {k: count / len(cases) for k, count in totals.items()}
+    expected = reporting.budget.probabilities
+    variation = 0.5 * sum(abs(shares.get(k, 0.0) - expected.get(k, 0.0))
+                          for k in set(shares) | set(expected))
+    # Only a noise draw of at least k (which leaves one profile term) overshoots.
+    assert variation < 0.08
+    mean_total = sum(k * c for k, c in totals.items()) / len(cases)
+    assert mean_total == pytest.approx(reporting.budget.mean(), abs=0.12)
+    report = validate_cases(
+        cases, profiles={"OMIM:7": rich}, ontology=ontology, config=config,
+        noise_vocabulary={term.hpo_id for term in vocabulary},
+        report_model=reporting.model,
+    )
+    assert report["violations"]["count"] == 0, report["violations"]
+    assert report["reporting"]["total_variation_reported_total_vs_expected"] < 0.08
 
 
 def test_report_score_decides_which_true_terms_are_reported(ontology, tmp_path) -> None:

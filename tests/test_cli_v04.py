@@ -20,6 +20,8 @@ GENE_OPTIONS = (
     "--gnn-genes", str(HPOA / "gnn_genes.json"),
 )
 
+NOISE = ("--noise-vocabulary", str(HPOA / "noise_vocabulary.tsv"))
+
 
 def _invoke(*args: str):
     return CliRunner().invoke(app, [*CONFIG, *args])
@@ -47,7 +49,7 @@ def v04_run(tmp_path_factory):
     simulated = _invoke(
         "simulate", "--profiles", str(profiles), "--output", str(cases), *GENE_OPTIONS,
         "--genes", "all", "--cases-per-gene", "20", "--difficulty", "medium",
-        "--calibration", str(_calibration(directory)),
+        "--calibration", str(_calibration(directory)), *NOISE,
     )
     assert simulated.exit_code == 0, simulated.output
     return directory, profiles, cases
@@ -83,6 +85,16 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
         ("OMIM:100008", "ORPHA:3001")
     }
     assert all(c.metadata.report_budget in {1, 2, 3, 4} for c in cases)
+    for case in cases:
+        k = case.metadata.report_budget
+        assert case.metadata.report_budget_profile == max(1, k - len(case.noise_phenotypes))
+    reporting = summary["reporting"]
+    total = sum(len(c.positive_phenotypes) + len(c.noise_phenotypes) for c in cases)
+    assert reporting["reported_total_mean"] == round(total / len(cases), 4)
+    assert reporting["budget_mean_drawn"] == round(
+        sum(c.metadata.report_budget for c in cases) / len(cases), 4
+    )
+    assert reporting["reported_noise_mean"] > 0
 
 
 def test_v04_simulate_is_byte_identical(v04_run, tmp_path: Path) -> None:
@@ -92,7 +104,7 @@ def test_v04_simulate_is_byte_identical(v04_run, tmp_path: Path) -> None:
     result = _invoke(
         "simulate", "--profiles", str(profiles), "--output", str(again), *GENE_OPTIONS,
         "--genes", "all", "--cases-per-gene", "20", "--difficulty", "medium",
-        "--calibration", str(_calibration(tmp_path)),
+        "--calibration", str(_calibration(tmp_path)), *NOISE,
     )
 
     assert result.exit_code == 0, result.output

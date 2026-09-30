@@ -16,12 +16,14 @@ The generative model for one case (``docs/README.md`` documents every knob):
    congenital terms are always eligible. Eligible terms are present with
    probability ``p``.
 3. **Reporting** (``reporting.mode: report_model``, ADR-0011). A term budget
-   ``k`` is drawn from the report model's histogram; the true cardinal terms
+   ``k`` is drawn from the report model's histogram. It counts every present
+   term a record shows, noise included, so the noise count ``n`` is drawn next
+   and the profile terms get ``max(1, k - n)``: the true cardinal terms
    (``cardinal-v1``) are reported first, then true terms are picked without
    replacement with probability proportional to the reporting model's score
-   until ``k`` terms are reported (all of them when ``k`` exceeds the true
-   terms). ``reporting.mode: observation`` keeps simulator 0.3's model: each
-   present term is recorded with the preset's observation rate. Either way,
+   until that many are reported (all of them when it exceeds the true terms).
+   ``reporting.mode: observation`` keeps simulator 0.3's model: each present
+   term is recorded with the preset's observation rate. Either way,
    recorded terms may be generalized to a parent term, unrecorded true terms
    become ``missing``/``unknown``, and a term whose generalization is already
    recorded becomes ``missing`` (``reason: recorded_as_generalized``), so every
@@ -353,7 +355,7 @@ def simulate_cases(
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions, budget,
+                        profile_version, source_versions, *budget,
                     ),
                     **case,
                 )
@@ -433,7 +435,7 @@ def simulate_gene_cases(
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions, budget,
+                        profile_version, source_versions, *budget,
                     ),
                     **case,
                 )
@@ -471,6 +473,7 @@ def _metadata(
     profile_version: str | None,
     source_versions: Mapping[str, str] | None,
     report_budget: int | None = None,
+    report_budget_profile: int | None = None,
 ) -> GeneratorMetadata:
     return GeneratorMetadata(
         generator_version=__version__,
@@ -482,6 +485,7 @@ def _metadata(
         case_seed=seed,
         sex_prior_key=sex_key,
         report_budget=report_budget,
+        report_budget_profile=report_budget_profile,
         difficulty=difficulty,
     )
 
@@ -679,10 +683,14 @@ def _simulate_one_case(
     noise_vocabulary: Sequence[NoiseTerm],
     sex_terms: SexSpecificTerms,
     reporting: Reporting | None = None,
-) -> tuple[dict[str, object], int | None]:
+) -> tuple[dict[str, object], tuple[int | None, int | None]]:
+    """One case's fields, and its report budgets ``(k, profile budget)`` (report mode)."""
+
     patient = _sample_patient(model, config, rng, sex_terms)
     observation: _Observation | None = None
     budget: int | None = None
+    profile_budget: int | None = None
+    noise_slots: int | None = None
     if config.reporting.mode == "report_model":
         assert reporting is not None
         truth: list[int] = []
@@ -694,10 +702,15 @@ def _simulate_one_case(
             if truth:
                 break
         budget = reporting.budget.draw(rng)
+        # The histogram counts every present term a real record shows, noise
+        # included, so noise takes its share of the budget before profile terms.
+        showable = len(_noise_pool(model, patient, set(), None, noise_vocabulary, sex_terms))
+        noise_slots = min(noise_count(preset, noise_vocabulary, rng), showable)
+        profile_budget = max(1, budget - noise_slots)
         if truth:
             observation = _report(
-                model, patient, truth, budget, config.reporting.force_cardinal, preset, rng,
-                ontology,
+                model, patient, truth, profile_budget, config.reporting.force_cardinal, preset,
+                rng, ontology,
             )
     else:
         for _ in range(config.max_redraws):
@@ -711,13 +724,25 @@ def _simulate_one_case(
         patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
 
-    negatives = _sample_negatives(
-        model, patient, observation.present_ids, config, preset, rng, ontology, sex_terms
-    )
-    noise = _sample_noise(
-        model, patient, observation.present_ids, negatives, preset, noise_vocabulary, rng,
-        ontology, sex_terms,
-    )
+    if noise_slots is None:
+        negatives = _sample_negatives(
+            model, patient, observation.present_ids, config, preset, rng, ontology, sex_terms
+        )
+        noise = _sample_noise(
+            model, patient, observation.present_ids, negatives, preset, noise_vocabulary, rng,
+            ontology, sex_terms,
+        )
+    else:
+        # Noise is part of the reported budget, so it is shown before negatives,
+        # which then keep clear of it as of any present term.
+        noise = _sample_noise(
+            model, patient, observation.present_ids, [], preset, noise_vocabulary, rng,
+            ontology, sex_terms, count=noise_slots,
+        )
+        negatives = _sample_negatives(
+            model, patient, observation.present_ids | {term.hpo_id for term in noise},
+            config, preset, rng, ontology, sex_terms,
+        )
 
     hide_sex = rng.random() < config.missingness.sex_unknown
     hide_age = rng.random() < config.missingness.age_unknown
@@ -738,7 +763,7 @@ def _simulate_one_case(
         "unknown_phenotypes": observation.unknown,
         "noise_phenotypes": noise,
     }
-    return case, budget
+    return case, (budget, profile_budget)
 
 
 def _sample_patient(
@@ -1193,22 +1218,17 @@ def _sample_noise(
     rng: random.Random,
     ontology: HpoOntology | None,
     sex_terms: SexSpecificTerms,
+    *,
+    count: int | None = None,
 ) -> list[CasePhenotype]:
-    if not noise_vocabulary or preset.noise_mean <= 0.0:
-        return []
-    count = _poisson(preset.noise_mean, rng)
+    """Noise terms; ``count`` is drawn here unless the caller drew it already."""
+
+    if count is None:
+        count = noise_count(preset, noise_vocabulary, rng)
     if count == 0:
         return []
     negated = _RelatedTerms(ontology, {negative.hpo_id for negative in negatives})
-    pool = [
-        term
-        for term in noise_vocabulary
-        if term.weight > 0.0
-        and term.hpo_id not in model.disease_term_ids
-        and term.hpo_id not in present_ids
-        and not negated.related(term.hpo_id)
-        and sex_terms.allowed(term.hpo_id, None, patient.sex)
-    ]
+    pool = _noise_pool(model, patient, present_ids, negated, noise_vocabulary, sex_terms)
     noise: list[CasePhenotype] = []
     while pool and len(noise) < count:
         term = pool.pop(_weighted_index([item.weight for item in pool], rng))
@@ -1223,6 +1243,35 @@ def _sample_noise(
             )
         )
     return noise
+
+
+def _noise_pool(
+    model: _DiseaseModel,
+    patient: _Patient,
+    present_ids: set[str],
+    negated: _RelatedTerms | None,
+    noise_vocabulary: Sequence[NoiseTerm],
+    sex_terms: SexSpecificTerms,
+) -> list[NoiseTerm]:
+    return [
+        term
+        for term in noise_vocabulary
+        if term.weight > 0.0
+        and term.hpo_id not in model.disease_term_ids
+        and term.hpo_id not in present_ids
+        and (negated is None or not negated.related(term.hpo_id))
+        and sex_terms.allowed(term.hpo_id, None, patient.sex)
+    ]
+
+
+def noise_count(
+    preset: DifficultyPreset, noise_vocabulary: Sequence[NoiseTerm], rng: random.Random
+) -> int:
+    """Poisson count of noise terms with the preset's mean; 0 without a vocabulary."""
+
+    if not noise_vocabulary or preset.noise_mean <= 0.0:
+        return 0
+    return _poisson(preset.noise_mean, rng)
 
 
 def negative_count(

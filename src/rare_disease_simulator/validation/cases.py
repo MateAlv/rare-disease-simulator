@@ -17,10 +17,11 @@ the estimate up to sampling noise and the at-least-one-positive redraw.
 Merged gene-first cases (``target.profile_ids``) are checked against the
 profile merged from those ids, as the simulator built it. Report-model cases
 (``metadata.report_budget``) are also checked for the reporting rule: the
-reported count is ``min(true terms, max(budget, true cardinal terms))``, every
-true cardinal term is reported when the budget is at least 1, and the budget
-lies in the report model's histogram; the report compares the drawn budgets
-and the reported counts with that histogram.
+reported profile-term count is ``min(true terms, max(profile budget, true
+cardinal terms))``, with the profile budget ``max(1, k - noise drawn)``, every
+true cardinal term is reported when the budget is at least 1, and ``k`` lies
+in the report model's histogram; the report compares the drawn budgets and
+the reported counts, profile terms plus noise, with that histogram.
 """
 
 from __future__ import annotations
@@ -97,6 +98,7 @@ class _Accumulator:
     case_profiles: dict[str, DiseaseProfile] = field(default_factory=dict)
     budgets: Counter[int] = field(default_factory=Counter)
     reported: Counter[int] = field(default_factory=Counter)
+    reported_total: Counter[int] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
     violations: Counter[str] = field(default_factory=Counter)
     examples: list[dict[str, str]] = field(default_factory=list)
@@ -226,6 +228,12 @@ def _check_reporting(
     acc.budgets[k] += 1
     if budget is not None and k not in budget.probabilities:
         acc.violation("budget_outside_histogram", case.case_id, str(k))
+    profile_budget = case.metadata.report_budget_profile
+    if profile_budget is None:
+        profile_budget = k
+    elif not 1 <= profile_budget <= max(1, k - len(case.noise_phenotypes)):
+        # max(1, k - noise drawn); fewer noise terms are shown when the pool runs dry.
+        acc.violation("profile_budget_mismatch", case.case_id, f"{profile_budget} for k={k}")
     profile_positives = [p for p in case.positive_phenotypes if p.simulated_origin != "noise"]
     reported_ids = {p.source_hpo_id or p.hpo_id for p in profile_positives}
     reported_ids |= {p.hpo_id for p in case.missing_phenotypes if p.reason == MERGED_REASON}
@@ -235,10 +243,13 @@ def _check_reporting(
         1 for p in case.missing_phenotypes if p.reason == MERGED_REASON
     )
     acc.reported[reported] += 1
+    acc.reported_total[reported + len(case.noise_phenotypes)] += 1
     true_count = reported + len(unreported - reported_ids)
     if cardinal is None:
-        if reported < min(k, true_count):
-            acc.violation("reported_below_budget", case.case_id, f"{reported}<{k}")
+        if reported < min(profile_budget, true_count):
+            acc.violation(
+                "reported_below_budget", case.case_id, f"{reported}<{profile_budget}"
+            )
         return
     ids = case.target.profile_ids or [case.target.disease_id]
     true_cardinal = (reported_ids | unreported) & cardinal.terms_for(ids)
@@ -247,8 +258,8 @@ def _check_reporting(
     acc.cardinal["reported_terms"] += len(true_cardinal & reported_ids)
     if true_cardinal:
         acc.cardinal["cases_with_true_cardinal"] += 1
-    forced = len(true_cardinal) if force_cardinal and k > 0 else 0
-    expected = min(true_count, max(k, forced))
+    forced = len(true_cardinal) if force_cardinal and profile_budget > 0 else 0
+    expected = min(true_count, max(profile_budget, forced))
     if reported != expected:
         acc.violation("reported_count_mismatch", case.case_id, f"{reported}!={expected}")
     if forced:
@@ -265,19 +276,27 @@ def _reporting_report(
         return None
     drawn = {k: count / cases for k, count in acc.budgets.items()}
     reported = {k: count / cases for k, count in acc.reported.items()}
+    total = {k: count / cases for k, count in acc.reported_total.items()}
     expected = budget.probabilities if budget is not None else None
     return {
         "cases": cases,
         "budget_expected": _share_table(expected) if expected is not None else None,
         "budget_drawn": _share_table(drawn),
         "reported_per_case": _share_table(reported),
+        "reported_total_per_case": _share_table(total),
         "reported_mean": round(sum(k * c for k, c in acc.reported.items()) / cases, 3),
+        "reported_total_mean": round(
+            sum(k * c for k, c in acc.reported_total.items()) / cases, 3
+        ),
         "budget_mean": round(sum(k * c for k, c in acc.budgets.items()) / cases, 3),
         "total_variation_drawn_vs_expected": (
             _total_variation(drawn, expected) if expected is not None else None
         ),
         "total_variation_reported_vs_expected": (
             _total_variation(reported, expected) if expected is not None else None
+        ),
+        "total_variation_reported_total_vs_expected": (
+            _total_variation(total, expected) if expected is not None else None
         ),
         "cardinal": (
             {
@@ -710,9 +729,10 @@ def format_report(report: Mapping[str, Any]) -> str:
     if reporting is not None:
         lines.append(
             f"Reporting ({reporting['cases']} report-model cases): budget mean "
-            f"{reporting['budget_mean']}, reported mean {reporting['reported_mean']}; "
-            f"TV drawn vs histogram {reporting['total_variation_drawn_vs_expected']}, "
-            f"reported vs histogram {reporting['total_variation_reported_vs_expected']}"
+            f"{reporting['budget_mean']}, reported mean {reporting['reported_total_mean']} "
+            f"({reporting['reported_mean']} profile terms + noise); TV vs histogram: "
+            f"drawn {reporting['total_variation_drawn_vs_expected']}, reported "
+            f"{reporting['total_variation_reported_total_vs_expected']}"
         )
         cardinal = reporting["cardinal"]
         if cardinal is not None:

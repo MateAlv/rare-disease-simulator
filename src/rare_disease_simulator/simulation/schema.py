@@ -114,7 +114,14 @@ class GeneratorMetadata(StrictBaseModel):
     report_budget: int | None = Field(
         default=None,
         ge=0,
-        description="Report-model emission: the term budget drawn for the case.",
+        description="Report-model emission: the term budget k drawn for the case, which "
+        "counts profile terms and noise together.",
+    )
+    report_budget_profile: int | None = Field(
+        default=None,
+        ge=1,
+        description="Report-model emission: the budget left for profile terms, "
+        "max(1, k - noise terms drawn).",
     )
     difficulty: Difficulty
     generated_at: datetime | None = Field(
