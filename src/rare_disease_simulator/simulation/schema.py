@@ -87,7 +87,9 @@ class CasePhenotype(StrictBaseModel):
     observed: bool | None = None
     source_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     source_hpo_id: str | None = Field(
-        default=None, description="Profile term this entry was generalized from."
+        default=None,
+        description="Profile term this entry was generalized or specialized from; for "
+        "related noise, the true term it was drawn near.",
     )
     simulated_origin: str
     reason: str | None = None
@@ -358,6 +360,22 @@ class ReportingSettings(StrictBaseModel):
         description="Per-slot noise probability for noise_count 'budget_share' (the share of "
         "a real record's present terms that the knowledge base does not explain).",
     )
+    specialize_rate: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Probability that a reported, not generalized profile term is shown as a "
+        "descendant: a child, then with probability 0.5 a grandchild (ADR-0011 amendment 3).",
+    )
+
+
+class NoiseSettings(StrictBaseModel):
+    """Where noise terms come from (report-model emission)."""
+
+    related_share: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Probability that a noise slot is a disease-related term (a descendant, "
+        "at most 2 levels down, of a true term's parent or grandparent) rather than a "
+        "vocabulary term (ADR-0011 amendment 3).",
+    )
 
 
 class MissingnessSettings(StrictBaseModel):
@@ -392,6 +410,7 @@ class SimulationConfig(StrictBaseModel):
         "(simulator 0.3).",
     )
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
+    noise: NoiseSettings = Field(default_factory=NoiseSettings)
     max_redraws: int = Field(
         default=20,
         ge=0,
