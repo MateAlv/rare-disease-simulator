@@ -70,7 +70,7 @@ from rare_disease_simulator.simulation.reporting import (
     load_report_model,
 )
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
-from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
+from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase, run_config
 from rare_disease_simulator.simulation.simulator import (
     SIMULATOR_VERSION,
     SexSpecificTerms,
@@ -903,15 +903,19 @@ def _load_reporting(
 def _merge_summary(
     plan: GenePlan, profiles: dict[str, DiseaseProfile], ontology: HpoOntology | None
 ) -> dict[str, int]:
-    """What merging did over the plan's entities (run summary ``entity_profiles``)."""
+    """What merging did over the plan's distinct entities (run summary ``entity_profiles``)."""
 
     total = MergeStats()
-    for target in plan.targets:
-        for entity in target.entities:
-            _, stats = merge_entity_profiles(
-                entity.entity, [profiles[pid] for pid in entity.profile_ids], ontology
-            )
-            total.add(stats)
+    entities = {
+        (entity.entity, entity.profile_ids): entity
+        for target in plan.targets
+        for entity in target.entities
+    }
+    for (entity_id, profile_ids), _ in sorted(entities.items()):
+        _, stats = merge_entity_profiles(
+            entity_id, [profiles[pid] for pid in profile_ids], ontology
+        )
+        total.add(stats)
     return total.summary()
 
 
@@ -1179,7 +1183,7 @@ def validate(
     run_data: dict | None = None
     if run_summary is not None or summary_path.is_file():
         run_data = json.loads(_required_file(summary_path, "run summary").read_text("utf-8"))
-        sim_config = SimulationConfig.model_validate(run_data["config"])
+        sim_config = run_config(run_data["config"])
         config_source = str(summary_path)
     if noise_vocabulary is None and run_data is not None:
         recorded = (run_data.get("inputs") or {}).get("noise_vocabulary")
@@ -1374,7 +1378,7 @@ def export_training(
         if noise_record and Path(noise_record["path"]).is_file()
         else None
     )
-    sim_config = SimulationConfig.model_validate(run_data["config"])
+    sim_config = run_config(run_data["config"])
     profile_map = {
         profile.disease_id: profile for profile in iter_model_jsonl(profiles_path, DiseaseProfile)
     }

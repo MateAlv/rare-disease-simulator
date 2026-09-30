@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -386,3 +386,21 @@ class SimulationConfig(StrictBaseModel):
         cls, value: dict[Difficulty, DifficultyPreset]
     ) -> dict[Difficulty, DifficultyPreset]:
         return {**DIFFICULTY_PRESETS, **value}
+
+
+def run_config(data: dict[str, Any]) -> SimulationConfig:
+    """The config a run summary records, reading a pre-0.4 summary with 0.3 semantics.
+
+    A summary written before simulator 0.4 has no ``entity_profiles``,
+    ``reporting`` or ``frequency.count_estimator``; its cases were made with
+    uniform profile draws, observation emission and Jeffreys counts, so those
+    are filled in instead of the 0.4 defaults.
+    """
+
+    config = dict(data)
+    config.setdefault("entity_profiles", "uniform")
+    config.setdefault("reporting", {"mode": "observation"})
+    frequency = dict(config.get("frequency") or {})
+    frequency.setdefault("count_estimator", "jeffreys")
+    config["frequency"] = frequency
+    return SimulationConfig.model_validate(config)

@@ -33,7 +33,7 @@ from typing import Any
 
 from rare_disease_simulator.data_sources.hpo import HpoOntology
 from rare_disease_simulator.profiles.merge import merge_entity_profiles
-from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.profiles.schema import DiseaseProfile, PhenotypeAssociation
 from rare_disease_simulator.simulation.reporting import BudgetSampler, CardinalIndex, ReportModel
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
 from rare_disease_simulator.simulation.simulator import (
@@ -41,6 +41,7 @@ from rare_disease_simulator.simulation.simulator import (
     FORCED_REASON,
     MERGED_REASON,
     SexSpecificTerms,
+    ShrinkageMeanMissing,
     config_hash,
     sex_prior_key,
     simulation_frequency,
@@ -469,11 +470,7 @@ def _calibration(
             continue
         present = acc.present_counts[disease_id]
         for phenotype in profile.phenotypes:
-            frequency = (
-                simulation_frequency(phenotype, config.frequency)
-                if config is not None
-                else phenotype.frequency_estimate
-            )
+            frequency = _simulated_frequency(phenotype, config)
             expected = frequency if frequency is not None else unknown
             pair = (expected, present[phenotype.hpo_id] / cases, cases)
             all_pairs.append(pair)
@@ -492,6 +489,19 @@ def _calibration(
         "all_terms": _calibration_table(all_pairs),
         "ungated_terms": _calibration_table(ungated),
     }
+
+
+def _simulated_frequency(
+    phenotype: PhenotypeAssociation, config: SimulationConfig | None
+) -> float | None:
+    """The frequency the run simulated the term with; the stored estimate without a prior mean."""
+
+    if config is None:
+        return phenotype.frequency_estimate
+    try:
+        return simulation_frequency(phenotype, config.frequency)
+    except ShrinkageMeanMissing:
+        return phenotype.frequency_estimate
 
 
 def _calibration_table(pairs: Sequence[tuple[float, float, int]]) -> dict[str, Any]:

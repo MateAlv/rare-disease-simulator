@@ -17,7 +17,7 @@ from rare_disease_simulator.simulation.reporting import (
     Reporting,
     load_report_model,
 )
-from rare_disease_simulator.simulation.schema import FrequencySettings
+from rare_disease_simulator.simulation.schema import FrequencySettings, run_config
 from rare_disease_simulator.simulation.simulator import (
     CARDINAL_REASON,
     MERGED_REASON,
@@ -312,3 +312,13 @@ def test_genes_v2_fields_are_read_like_genes_v1(tmp_path) -> None:
 
     genea = next(target for target in plan.targets if target.symbol == "GENEA")
     assert [entity.entity for entity in genea.entities] == ["OMIM:100001"]
+
+
+def test_pre_04_run_summaries_keep_03_semantics() -> None:
+    legacy = run_config({"seed": 3, "frequency": {"concentration": 8.0}})
+    current = run_config(_config().model_dump(mode="json"))
+
+    assert (legacy.entity_profiles, legacy.reporting.mode) == ("uniform", "observation")
+    assert legacy.frequency.count_estimator == "jeffreys"
+    assert current.reporting.mode == "report_model"
+    assert current == _config()
