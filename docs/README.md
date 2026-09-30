@@ -795,6 +795,14 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `age.unknown_onset_prior.childhood_or_adolescent` | float | `null` |
 | `age.unknown_onset_prior.variable` | float | `0.04` |
 | `age.duration_mean_years` | float | `5.0` |
+| `age.duration_mean_by_onset.antenatal` | float | `null` |
+| `age.duration_mean_by_onset.neonatal` | float | `null` |
+| `age.duration_mean_by_onset.infantile` | float | `null` |
+| `age.duration_mean_by_onset.childhood` | float | `null` |
+| `age.duration_mean_by_onset.juvenile` | float | `null` |
+| `age.duration_mean_by_onset.adult` | float | `null` |
+| `age.duration_mean_by_onset.childhood_or_adolescent` | float | `null` |
+| `age.duration_mean_by_onset.variable` | float | `null` |
 | `age.duration_max_years` | float | `40.0` |
 | `age.max_age_years` | float | `90.0` |
 | `progression.max_boost` | float | `0.25` |
@@ -814,9 +822,9 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `missingness.onset_unknown` | float | `0.3` |
 | `missingness.no_negatives` | float | `0.2` |
 | `entity_profiles` | "merged" / "uniform" | `"merged"` |
-| `reporting.mode` | "report_model" / "observation" | `"report_model"` |
+| `reporting.mode` | "report_model" / "independent" / "observation" | `"report_model"` |
 | `reporting.force_cardinal` | bool | `true` |
-| `reporting.noise_count` | "poisson" / "budget_share" | `"poisson"` |
+| `reporting.noise_count` | "poisson" / "budget_share" / "proportional" | `"poisson"` |
 | `reporting.noise_share` | float | `0.0` |
 | `reporting.specialize_rate` | float | `0.0` |
 | `noise.related_share` | float | `0.0` |

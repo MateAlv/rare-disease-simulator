@@ -73,6 +73,8 @@ from rare_disease_simulator.simulation.reporting import (
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase, run_config
 from rare_disease_simulator.simulation.simulator import (
+    FORCED_REASON,
+    MERGED_REASON,
     RELATED_NOISE_REASON,
     SIMULATOR_VERSION,
     SPECIALIZED_REASON,
@@ -751,7 +753,7 @@ def simulate(
         )
 
     output_path = output or config.exports.rich_cases_path
-    realized = _ReportedTotals()
+    realized = _ReportedTotals(sim_config.reporting.mode)
     written = write_jsonl(output_path, realized.track(cases))
     run_summary: dict[str, object] = {
         "simulate": {
@@ -817,14 +819,17 @@ def simulate(
 class _ReportedTotals:
     """Realized report budgets and reported terms of the cases as they are written."""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "report_model") -> None:
+        self.mode = mode
         self.counts: Counter[str] = Counter()
 
     def track(self, cases: Iterable[SyntheticCase]) -> Iterator[SyntheticCase]:
         for case in cases:
-            if case.metadata.report_budget is not None:
+            if case.metadata.report_budget is not None or self.mode == "independent":
                 self.counts["cases"] += 1
-                self.counts["budget"] += case.metadata.report_budget
+                self.counts["budget"] += case.metadata.report_budget or 0
+                if self.mode == "independent":
+                    self._track_independent(case)
                 self.counts["profile"] += len(case.positive_phenotypes)
                 self.counts["noise"] += len(case.noise_phenotypes)
                 self.counts["specialized"] += sum(
@@ -835,12 +840,47 @@ class _ReportedTotals:
                 )
             yield case
 
+    def _track_independent(self, case: SyntheticCase) -> None:
+        shown = [p for p in case.positive_phenotypes if p.simulated_origin == "disease_profile"]
+        merged = [p for p in case.missing_phenotypes if p.reason == MERGED_REASON]
+        unreported = [p for p in case.missing_phenotypes if p.reason != MERGED_REASON]
+        unreported += case.unknown_phenotypes
+        self.counts["true_terms"] += len(shown) + len(merged) + len(unreported)
+        self.counts["true_terms_reported"] += len(shown) + len(merged)
+        rolled = [
+            p.report_probability
+            for p in [*shown, *merged, *unreported]
+            if p.report_probability is not None
+        ]
+        self.counts["q_terms"] += len(rolled)
+        self.counts["q_capped"] += sum(1 for q in rolled if q >= 1.0)
+        forced = sum(1 for p in case.positive_phenotypes if p.reason == FORCED_REASON)
+        self.counts["forced_min_one"] += forced
+
     def summary(self) -> dict[str, object]:
         cases = self.counts["cases"]
 
         def mean(key: str) -> float | None:
             return round(self.counts[key] / cases, 4) if cases else None
 
+        if self.mode == "independent":
+            return {
+                "cases": cases,
+                "reported_profile_mean": mean("profile"),
+                "reported_noise_mean": mean("noise"),
+                "reported_total_mean": (
+                    round((self.counts["profile"] + self.counts["noise"]) / cases, 4)
+                    if cases
+                    else None
+                ),
+                "true_terms_reported_share": self._share("true_terms_reported", "true_terms"),
+                "q_capped_share": self._share("q_capped", "q_terms"),
+                "forced_min_one": self.counts["forced_min_one"],
+                "specialized": {
+                    "terms": self.counts["specialized"],
+                    "share_of_profile_terms": self._share("specialized", "profile"),
+                },
+            }
         return {
             "budget_mean_drawn": mean("budget"),
             "reported_total_mean": (
@@ -909,7 +949,8 @@ def _load_reporting(
     """Load report-model-v1 and cardinal-v1 when the emission mode needs them."""
 
     sources = config.sources
-    if sim_config.reporting.mode != "report_model":
+    mode = sim_config.reporting.mode
+    if mode == "observation":
         if report_model is not None or cardinal is not None:
             raise typer.BadParameter(
                 "--report-model/--cardinal given but reporting.mode is observation"
@@ -918,11 +959,17 @@ def _load_reporting(
     model_path = report_model or sources.report_model_path
     if model_path is None:
         raise typer.BadParameter(
-            "reporting.mode is report_model: pass --report-model (report-model-v1) or set "
+            f"reporting.mode is {mode}: pass --report-model (report-model-v1) or set "
             "sources.report_model_path, or set reporting.mode: observation"
         )
     cardinal_path = cardinal or sources.cardinal_path
-    if cardinal_path is None and sim_config.reporting.force_cardinal:
+    if mode == "independent" and sim_config.reporting.force_cardinal:
+        typer.echo(
+            "Warning: reporting.force_cardinal is ignored in independent mode; cardinal terms "
+            "are reported through the report model's cardinal coefficient.",
+            err=True,
+        )
+    if cardinal_path is None and mode == "report_model" and sim_config.reporting.force_cardinal:
         raise typer.BadParameter(
             "reporting.force_cardinal needs --cardinal (cardinal-v1) or sources.cardinal_path; "
             "set reporting.force_cardinal: false to report without cardinal terms"
@@ -955,6 +1002,15 @@ def _load_reporting(
         )
     except ReportingArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    if (
+        mode == "independent"
+        and cardinal_path is None
+        and any(feature.kind == "cardinal_flag" for feature in model.features)
+    ):
+        raise typer.BadParameter(
+            "the report model has a cardinal_flag feature: pass --cardinal (cardinal-v1) or "
+            "set sources.cardinal_path"
+        )
     model_record["artifact_id"] = model.artifact_id
     return reporting, {"report_model": model_record, "cardinal": cardinal_record}
 
