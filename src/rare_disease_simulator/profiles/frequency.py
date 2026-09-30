@@ -164,6 +164,27 @@ def category_for_probability(probability: float) -> str:
     return "very_rare"
 
 
+def pooled_counts(raw: str | None) -> tuple[int, int] | None:
+    """The pooled ``(n, m)`` of a count-based ``frequency_raw`` (``"n/m"``), else None."""
+
+    if not raw:
+        return None
+    ratio = _RATIO_RE.match(raw)
+    if ratio is None or int(ratio.group(2)) == 0:
+        return None
+    return int(ratio.group(1)), int(ratio.group(2))
+
+
+def beta_shrinkage_mean(successes: int, trials: int, prior_mean: float, strength: float) -> float:
+    """Posterior mean of ``n/m`` under a Beta prior with the given mean and pseudo-count strength.
+
+    ``(n + strength * prior_mean) / (m + strength)``; with the ADR-0011 strength
+    of 2 pseudo-patients, ``1/1`` becomes ``(1 + 2 * prior_mean) / 3``.
+    """
+
+    return (successes + strength * prior_mean) / (trials + strength)
+
+
 def jeffreys_mean(successes: int, trials: int) -> float:
     """Posterior mean of a Binomial proportion under the Jeffreys Beta(1/2, 1/2) prior."""
 
