@@ -32,7 +32,7 @@ OwnDiseasePool = Literal["profile", "entity"]
 UnfilledSlots = Literal["drop", "redistribute"]
 CountEstimator = Literal["beta_shrinkage", "jeffreys"]
 EntityProfiles = Literal["merged", "uniform"]
-EmissionMode = Literal["report_model", "observation"]
+EmissionMode = Literal["report_model", "independent", "observation"]
 
 
 class StrictBaseModel(BaseModel):
@@ -86,6 +86,13 @@ class CasePhenotype(StrictBaseModel):
     status: PhenotypeObservationStatus
     observed: bool | None = None
     source_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    report_probability: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Independent reporting: the term's report probability q = min(1, "
+        "score / frequency), on every true profile term, reported or not.",
+    )
     source_hpo_id: str | None = Field(
         default=None,
         description="Profile term this entry was generalized or specialized from; for "
@@ -248,6 +255,11 @@ class AgeSettings(StrictBaseModel):
     duration_mean_years: float = Field(
         default=5.0, gt=0.0, description="Mean of the exponential disease duration."
     )
+    duration_mean_by_onset: dict[OnsetCategory, float] = Field(
+        default_factory=dict,
+        description="Mean exponential duration per onset category; a category listed here "
+        "overrides duration_mean_years for patients with that onset.",
+    )
     duration_max_years: float = Field(default=40.0, ge=0.0)
     max_age_years: float = Field(default=90.0, gt=0.0)
 
@@ -263,6 +275,9 @@ class AgeSettings(StrictBaseModel):
         ]
         if missing:
             raise ValueError(f"unknown_onset_prior uses categories without a window: {missing}")
+        bad = [c for c, mean in self.duration_mean_by_onset.items() if not mean > 0.0]
+        if bad:
+            raise ValueError(f"duration_mean_by_onset must be positive: {bad}")
         return self
 
 
@@ -341,30 +356,44 @@ class ReportingSettings(StrictBaseModel):
     mode: EmissionMode = Field(
         default="report_model",
         description="'report_model': a term budget and a reporting model pick the reported "
-        "terms from the true ones (needs a report-model file); 'observation': each true term "
-        "is recorded with the preset's observation rate (simulator 0.3).",
+        "terms from the true ones (needs a report-model file); 'independent': each true term "
+        "is reported on its own with probability min(1, score / frequency) (simulator 0.5, "
+        "needs a report-model file); 'observation': each true term is recorded with the "
+        "preset's observation rate (simulator 0.3).",
     )
     force_cardinal: bool = Field(
         default=True,
         description="Report every true cardinal term (cardinal-v1) first, when the budget "
-        "is at least 1.",
+        "is at least 1 (report_model mode; ignored in independent mode).",
     )
-    noise_count: Literal["poisson", "budget_share"] = Field(
+    noise_count: Literal["poisson", "budget_share", "proportional"] = Field(
         default="poisson",
-        description="How many budget slots noise takes: 'poisson' draws the preset's "
-        "noise_mean independently of the budget; 'budget_share' makes each of the k slots "
-        "noise with probability noise_share, at most k - 1, so noise scales with the record.",
+        description="How many noise terms a record shows: 'poisson' draws the preset's "
+        "noise_mean; 'budget_share' (report_model mode) makes each of the k slots noise with "
+        "probability noise_share, at most k - 1; 'proportional' (independent mode) draws "
+        "Poisson(m * noise_share / (1 - noise_share)) for m reported profile terms.",
     )
     noise_share: float = Field(
         default=0.0, ge=0.0, le=1.0,
-        description="Per-slot noise probability for noise_count 'budget_share' (the share of "
-        "a real record's present terms that the knowledge base does not explain).",
+        description="Share of a real record's present terms that the knowledge base does not "
+        "explain; used by noise_count 'budget_share' and 'proportional' (< 1).",
     )
     specialize_rate: float = Field(
         default=0.0, ge=0.0, le=1.0,
         description="Probability that a reported, not generalized profile term is shown as a "
         "descendant: a child, then with probability 0.5 a grandchild (ADR-0011 amendment 3).",
     )
+
+    @model_validator(mode="after")
+    def _check_noise_count(self) -> ReportingSettings:
+        if self.mode == "independent" and self.noise_count == "budget_share":
+            raise ValueError("noise_count 'budget_share' needs a budget: use 'proportional' "
+                             "or 'poisson' in independent mode")
+        if self.mode == "report_model" and self.noise_count == "proportional":
+            raise ValueError("noise_count 'proportional' is for independent mode")
+        if self.noise_count == "proportional" and self.noise_share >= 1.0:
+            raise ValueError("noise_share must be below 1 for noise_count 'proportional'")
+        return self
 
 
 class NoiseSettings(StrictBaseModel):

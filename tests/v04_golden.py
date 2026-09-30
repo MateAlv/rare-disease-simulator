@@ -2,7 +2,9 @@
 
 ``tests/fixtures/v04/golden_0.4.1.jsonl.gz`` was written by this module with the
 0.4.1 code (b645c60). Each line is a case without the fields that name the
-simulator build (``simulator_version``, ``config_hash``).
+simulator build (``simulator_version``, ``config_hash``). Lines are compared
+without null fields, as ``write_jsonl`` writes cases, so a new optional field
+left unset keeps the comparison byte-for-byte meaningful.
 """
 
 from __future__ import annotations
@@ -51,10 +53,25 @@ def golden_lines(**extra: object) -> list[str]:
             TARGET, PROFILE_MAP, config, ontology=ontology, confounders=index,
             noise_vocabulary=NOISE, reporting=reporting,
         ):
-            data = json.loads(case.model_dump_json())
+            data = json.loads(case.model_dump_json(exclude_none=True))
             del data["metadata"]["simulator_version"], data["metadata"]["config_hash"]
             lines.append(json.dumps({"scenario": name, **data}, sort_keys=True))
     return lines
+
+
+def golden_file_lines() -> list[str]:
+    """The stored golden cases, without null fields."""
+
+    raw = gzip.decompress(GOLDEN.read_bytes()).decode().splitlines()
+    return [json.dumps(_without_nulls(json.loads(line)), sort_keys=True) for line in raw]
+
+
+def _without_nulls(value: object) -> object:
+    if isinstance(value, dict):
+        return {k: _without_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]
+    return value
 
 
 if __name__ == "__main__":

@@ -22,6 +22,10 @@ The generative model for one case (``docs/README.md`` documents every knob):
    (``cardinal-v1``) are reported first, then true terms are picked without
    replacement with probability proportional to the reporting model's score
    until that many are reported (all of them when it exceeds the true terms).
+   ``reporting.mode: independent`` (simulator 0.5) has no budget: each true
+   term is reported on its own with probability ``q = min(1, score /
+   frequency)``, the report model's marginal report rate divided by the
+   chance the term is true, and noise is proportional to the terms reported.
    ``reporting.mode: observation`` keeps simulator 0.3's model: each present
    term is recorded with the preset's observation rate. Either way,
    recorded terms may be generalized to a parent term, unrecorded true terms
@@ -91,7 +95,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.4.2"
+SIMULATOR_VERSION = "0.5.0"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -120,6 +124,8 @@ CARDINAL_REASON = "cardinal"
 SPECIALIZED_REASON = "specialized"
 RELATED_NOISE_REASON = "related"
 VOCABULARY_NOISE_REASON = "nonspecific_finding"
+# f_t floor in q_t = min(1, pi_t / f_t), so a near-zero frequency cannot blow up q.
+REPORT_FREQUENCY_FLOOR = 1e-3
 NOT_REPORTED_REASON = "not_reported"
 
 _T = TypeVar("_T")
@@ -259,6 +265,7 @@ class _Term:
     onset_window: tuple[float, float] | None
     cardinal: bool = False
     report_weight: float = 1.0
+    report_probability: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -461,9 +468,9 @@ def entity_profile(
 
 
 def _check_reporting(config: SimulationConfig, reporting: Reporting | None) -> None:
-    if config.reporting.mode == "report_model" and reporting is None:
+    if config.reporting.mode != "observation" and reporting is None:
         raise ValueError(
-            "reporting.mode is 'report_model' but no report model was given; pass a "
+            f"reporting.mode is {config.reporting.mode!r} but no report model was given; pass a "
             "report-model-v1 file, or set reporting.mode: observation for simulator 0.3 emission"
         )
 
@@ -515,21 +522,24 @@ def _disease_model(
     for phenotype in profile.phenotypes:
         frequency = simulation_frequency(phenotype, config.frequency)
         is_cardinal = phenotype.hpo_id in cardinal
+        mean = frequency if frequency is not None else config.frequency.unknown_frequency
+        weight = (
+            reporting.scorer.score(phenotype.hpo_id, frequency, is_cardinal)
+            if reporting is not None
+            else 1.0
+        )
         terms.append(
             _Term(
                 phenotype=phenotype,
-                mean=frequency if frequency is not None else config.frequency.unknown_frequency,
+                mean=mean,
                 always_eligible=phenotype.onset == "antenatal"
                 or phenotype.onset_hpo_id == CONGENITAL_ONSET,
                 onset_window=(
                     windows.get(phenotype.onset) if phenotype.onset != "unknown" else None
                 ),
                 cardinal=is_cardinal,
-                report_weight=(
-                    reporting.scorer.score(phenotype.hpo_id, frequency, is_cardinal)
-                    if reporting is not None
-                    else 1.0
-                ),
+                report_weight=weight,
+                report_probability=min(1.0, weight / max(mean, REPORT_FREQUENCY_FLOOR)),
             )
         )
     if confounders is None:
@@ -722,6 +732,25 @@ def _simulate_one_case(
                 model, patient, truth, profile_budget, config.reporting.force_cardinal, preset,
                 rng, ontology, sex_terms, config.reporting.specialize_rate,
             )
+    elif config.reporting.mode == "independent":
+        truth = []
+        for _ in range(config.max_redraws):
+            if not any(patient.eligible):
+                patient = _sample_patient(model, config, rng, sex_terms)
+                continue
+            truth = _sample_truth(patient, rng)
+            if truth:
+                break
+        if truth:
+            selected = {i for i in truth if rng.random() < model.terms[i].report_probability}
+            forced = None
+            if not selected:
+                forced = max(truth, key=lambda i: (model.terms[i].report_probability, -i))
+                selected = {forced}
+            observation = _report(
+                model, patient, truth, 0, False, preset, rng, ontology, sex_terms,
+                config.reporting.specialize_rate, selected=selected, forced=forced,
+            )
     else:
         for _ in range(config.max_redraws):
             if not any(patient.eligible):
@@ -733,6 +762,13 @@ def _simulate_one_case(
     if observation is None or not observation.positives:
         patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
+    if config.reporting.mode == "independent":
+        noise_slots = min(
+            _independent_noise_count(
+                config, preset, len(observation.positives), noise_vocabulary, rng
+            ),
+            len(_noise_pool(model, patient, set(), None, noise_vocabulary, sex_terms)),
+        )
 
     if noise_slots is None:
         negatives = _sample_negatives(
@@ -788,9 +824,10 @@ def _sample_patient(
     onset_category = _sample_onset_category(model.profile, config, rng)
     low, high = config.age.onset_years[onset_category]
     onset_age = rng.uniform(low, high)
-    duration = min(
-        rng.expovariate(1.0 / config.age.duration_mean_years), config.age.duration_max_years
+    duration_mean = config.age.duration_mean_by_onset.get(
+        onset_category, config.age.duration_mean_years
     )
+    duration = min(rng.expovariate(1.0 / duration_mean), config.age.duration_max_years)
     age = max(onset_age, min(onset_age + duration, config.age.max_age_years))
     boost = 0.0
     if model.profile.progression == "progressive" and config.progression.max_boost > 0.0:
@@ -929,6 +966,9 @@ def _report(
     ontology: HpoOntology | None,
     sex_terms: SexSpecificTerms | None = None,
     specialize_rate: float = 0.0,
+    *,
+    selected: set[int] | None = None,
+    forced: int | None = None,
 ) -> _Observation:
     """Record ``budget`` of the true terms: cardinal ones first, the rest by report score.
 
@@ -938,17 +978,26 @@ def _report(
     terms may be generalized to a parent or, when not generalized, shown as a
     descendant with ``specialize_rate``; unreported ones become ``missing``
     (``not_reported``) or ``unknown`` by the preset's split.
+
+    Independent mode passes the terms it ``selected`` instead of a budget:
+    nothing refills an absorbed term, every true term carries its report
+    probability, and a ``forced`` term is shown as it is (``forced_min_one``).
     """
 
+    independent = selected is not None
     reported: set[int] = set()
-    if force_cardinal and budget > 0:
-        reported = {index for index in truth if model.terms[index].cardinal}
-    pool = [index for index in truth if index not in reported]
-    slots = budget - len(reported)
-    while slots > 0 and pool:
-        chosen = pool.pop(_weighted_index([model.terms[i].report_weight for i in pool], rng))
-        reported.add(chosen)
-        slots -= 1
+    if independent:
+        reported = set(selected)
+        pool: list[int] = []
+    else:
+        if force_cardinal and budget > 0:
+            reported = {index for index in truth if model.terms[index].cardinal}
+        pool = [index for index in truth if index not in reported]
+        slots = budget - len(reported)
+        while slots > 0 and pool:
+            chosen = pool.pop(_weighted_index([model.terms[i].report_weight for i in pool], rng))
+            reported.add(chosen)
+            slots -= 1
 
     observation = _Observation()
     observed_ids: set[str] = set()
@@ -963,12 +1012,34 @@ def _report(
         term = model.terms[index]
         phenotype = term.phenotype
         probability = round(patient.probabilities[index], 4)
+        q = round(term.report_probability, 4) if independent else None
+        if index == forced:
+            if phenotype.hpo_id in observed_ids:
+                return False
+            observed_ids.add(phenotype.hpo_id)
+            observation.present_ids.add(phenotype.hpo_id)
+            observation.positives.append(
+                CasePhenotype(
+                    hpo_id=phenotype.hpo_id,
+                    label=phenotype.label,
+                    status="positive",
+                    observed=True,
+                    source_probability=probability,
+                    report_probability=q,
+                    simulated_origin="disease_profile",
+                    reason=FORCED_REASON,
+                )
+            )
+            return True
         hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng, other_sex_terms)
         if hpo_id in observed_ids:
             if phenotype.hpo_id in observed_ids:
                 return False
             observation.missing.append(
-                _unobserved(phenotype, probability, status="missing", reason=MERGED_REASON)
+                _unobserved(
+                    phenotype, probability, status="missing", reason=MERGED_REASON,
+                    report_probability=q,
+                )
             )
             return True
         generalized = hpo_id != phenotype.hpo_id
@@ -998,6 +1069,7 @@ def _report(
                 status="positive",
                 observed=True,
                 source_probability=probability,
+                report_probability=q,
                 source_hpo_id=phenotype.hpo_id if derived else None,
                 simulated_origin="disease_profile",
                 reason=reason,
@@ -1023,14 +1095,19 @@ def _report(
         if phenotype.hpo_id in observed_ids:
             continue
         probability = round(patient.probabilities[index], 4)
+        q = round(model.terms[index].report_probability, 4) if independent else None
         if rng.random() < preset.missing_vs_unknown_split:
             observation.missing.append(
-                _unobserved(phenotype, probability, status="missing", reason=NOT_REPORTED_REASON)
+                _unobserved(
+                    phenotype, probability, status="missing", reason=NOT_REPORTED_REASON,
+                    report_probability=q,
+                )
             )
         else:
             observation.unknown.append(
                 _unobserved(
-                    phenotype, probability, status="unknown", reason="not_enough_information"
+                    phenotype, probability, status="unknown", reason="not_enough_information",
+                    report_probability=q,
                 )
             )
     return observation
@@ -1156,7 +1233,12 @@ def _maybe_generalize(
 
 
 def _unobserved(
-    phenotype: PhenotypeAssociation, probability: float, *, status: str, reason: str
+    phenotype: PhenotypeAssociation,
+    probability: float,
+    *,
+    status: str,
+    reason: str,
+    report_probability: float | None = None,
 ) -> CasePhenotype:
     return CasePhenotype(
         hpo_id=phenotype.hpo_id,
@@ -1164,6 +1246,7 @@ def _unobserved(
         status=status,  # type: ignore[arg-type]
         observed=False if status == "missing" else None,
         source_probability=probability,
+        report_probability=report_probability,
         simulated_origin="disease_profile",
         reason=reason,
     )
@@ -1448,6 +1531,23 @@ def noise_count(
     if not noise_vocabulary or preset.noise_mean <= 0.0:
         return 0
     return _poisson(preset.noise_mean, rng)
+
+
+def _independent_noise_count(
+    config: SimulationConfig,
+    preset: DifficultyPreset,
+    reported: int,
+    noise_vocabulary: Sequence[NoiseTerm],
+    rng: random.Random,
+) -> int:
+    """Noise terms of an independent-mode record with ``reported`` profile terms shown."""
+
+    if config.reporting.noise_count != "proportional":
+        return noise_count(preset, noise_vocabulary, rng)
+    share = config.reporting.noise_share
+    if not noise_vocabulary or share <= 0.0 or reported <= 0:
+        return 0
+    return _poisson(reported * share / (1.0 - share), rng)
 
 
 def budget_share_noise_count(

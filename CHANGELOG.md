@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-30
+
+An independent review of 16 construction-side disease cards found hallmark features rarely reported (10 of 16) and records dominated by unrelated noise (9 of 16), and simulated ages far below real ones. Every new knob defaults to 0.4.2 behaviour.
+
+### Added
+- `reporting.mode: independent`: each true profile term is reported on its own with `q = min(1, π/f)` (π the report model's score, f the simulation frequency floored at 1e-3), cardinal terms included (`force_cardinal` is ignored, with a warning). With no successful roll, the highest-q true term is shown as it is (`forced_min_one`). Generalization, specialization and absorbed terms act per term, with no refill. True profile terms carry `CasePhenotype.report_probability`.
+- `reporting.noise_count: proportional`: `Poisson(m · ρ/(1 − ρ))` noise terms for `m` reported profile terms, ρ = `reporting.noise_share`, capped at the showable vocabulary. It is for independent mode; `budget_share` stays with `report_model` mode, and the config rejects mismatched pairs.
+- `age.duration_mean_by_onset`: a mean exponential duration per onset category, overriding `age.duration_mean_years`.
+- `validate` in independent mode: a q calibration table (bins of width 0.1, mean q against the realized report rate), reported terms and noise per case, the share of true terms reported, the capped share and the `forced_min_one` count; the budget checks do not apply.
+- Run summary in independent mode: reported profile terms and noise per case, share of true terms reported, `q_capped_share`, `forced_min_one`.
+
+### Changed
+- `SIMULATOR_VERSION` 0.5.0.
+- The golden-case test compares cases without null fields, as `write_jsonl` writes them, and also checks the new knobs at their defaults.
+
 ## [0.4.2] - 2026-09-30
 
 Candidate 2 design of `diagnostic.ar-training` ADR-0011 amendment 3 (evidence: ANALYSIS-002). Both knobs default to 0, and with the defaults a run reproduces 0.4.1 exactly apart from the version and config hash.

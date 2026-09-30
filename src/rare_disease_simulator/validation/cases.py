@@ -22,6 +22,9 @@ cardinal terms))``, with the profile budget ``max(1, k - noise drawn)``, every
 true cardinal term is reported when the budget is at least 1, and ``k`` lies
 in the report model's histogram; the report compares the drawn budgets and
 the reported counts, profile terms plus noise, with that histogram.
+Independent-mode cases (a report probability ``q`` on every true profile term)
+have no budget; the report bins the true terms by ``q`` and compares each
+bin's mean ``q`` with the share of its terms that were reported.
 """
 
 from __future__ import annotations
@@ -104,6 +107,8 @@ class _Accumulator:
     budgets: Counter[int] = field(default_factory=Counter)
     reported: Counter[int] = field(default_factory=Counter)
     reported_total: Counter[int] = field(default_factory=Counter)
+    q_rolls: list[tuple[float, bool]] = field(default_factory=list)
+    independent: Counter[str] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
     violations: Counter[str] = field(default_factory=Counter)
     examples: list[dict[str, str]] = field(default_factory=list)
@@ -142,6 +147,8 @@ def validate_cases(
         _check_case(acc, case, profile, ontology, config, sex_terms, noise_vocabulary, closures)
         if case.metadata.report_budget is not None:
             _check_reporting(acc, case, budget, cardinal, force_cardinal)
+        elif config is not None and config.reporting.mode == "independent":
+            _collect_report_rolls(acc, case)
 
     return {
         "cases": acc.cases,
@@ -181,7 +188,11 @@ def validate_cases(
             **_age_report(acc.onsets, acc.cases),
             "by_category": _category_report(acc.onset_categories, acc.expected_onset),
         },
-        "reporting": _reporting_report(acc, budget, cardinal),
+        "reporting": (
+            _independent_report(acc)
+            if acc.independent["cases"]
+            else _reporting_report(acc, budget, cardinal)
+        ),
         "calibration": (
             _calibration(acc, ontology, config) if profiles is not None else None
         ),
@@ -277,6 +288,67 @@ def _check_reporting(
         missed = sorted(true_cardinal & (unreported - reported_ids))
         if missed:
             acc.violation("cardinal_not_reported", case.case_id, ",".join(missed))
+
+
+def _collect_report_rolls(acc: _Accumulator, case: SyntheticCase) -> None:
+    """Each true profile term's report probability and whether its roll reported it.
+
+    A ``forced_min_one`` term was shown after every roll of its case failed,
+    so it counts as a failed roll.
+    """
+
+    acc.independent["cases"] += 1
+    rolls: list[tuple[float | None, bool]] = []
+    for p in case.positive_phenotypes:
+        if p.simulated_origin == "disease_profile":
+            rolls.append((p.report_probability, p.reason != FORCED_REASON))
+            acc.independent["reported"] += 1
+            acc.independent["forced_min_one"] += p.reason == FORCED_REASON
+    for p in case.missing_phenotypes:
+        merged = p.reason == MERGED_REASON
+        rolls.append((p.report_probability, merged))
+        acc.independent["reported"] += merged
+    rolls.extend((p.report_probability, False) for p in case.unknown_phenotypes)
+    acc.independent["true_terms"] += len(rolls)
+    acc.independent["noise"] += len(case.noise_phenotypes)
+    acc.q_rolls.extend((q, reported) for q, reported in rolls if q is not None)
+
+
+def _independent_report(acc: _Accumulator) -> dict[str, Any]:
+    cases = acc.independent["cases"]
+    bins = []
+    for decile in range(10):
+        low, high = decile / 10, (decile + 1) / 10
+        members = [
+            (q, reported)
+            for q, reported in acc.q_rolls
+            if low <= q < high or (decile == 9 and q == 1.0)
+        ]
+        if not members:
+            continue
+        bins.append(
+            {
+                "q_range": [low, high],
+                "terms": len(members),
+                "mean_q": round(sum(q for q, _ in members) / len(members), 4),
+                "reported_share": round(sum(r for _, r in members) / len(members), 4),
+            }
+        )
+    rolls = len(acc.q_rolls)
+    error = sum(abs(b["mean_q"] - b["reported_share"]) * b["terms"] for b in bins)
+    return {
+        "mode": "independent",
+        "cases": cases,
+        "q_calibration": bins,
+        "q_calibration_error": round(error / rolls, 4) if rolls else None,
+        "reported_per_case_mean": round(acc.independent["reported"] / cases, 3),
+        "noise_per_case_mean": round(acc.independent["noise"] / cases, 3),
+        "true_terms_reported_share": _share(
+            acc.independent["reported"], acc.independent["true_terms"]
+        ),
+        "q_capped_share": _share(sum(1 for q, _ in acc.q_rolls if q >= 1.0), rolls),
+        "forced_min_one": acc.independent["forced_min_one"],
+    }
 
 
 def _reporting_report(
@@ -784,7 +856,22 @@ def format_report(report: Mapping[str, Any]) -> str:
                     f"(n={row['pairs']})"
                 )
     reporting = report.get("reporting")
-    if reporting is not None:
+    if reporting is not None and reporting.get("mode") == "independent":
+        lines.append(
+            f"Independent reporting ({reporting['cases']} cases): "
+            f"{reporting['reported_per_case_mean']} profile terms and "
+            f"{reporting['noise_per_case_mean']} noise per case; "
+            f"{reporting['true_terms_reported_share']} of true terms reported; "
+            f"q capped {reporting['q_capped_share']}; "
+            f"forced_min_one {reporting['forced_min_one']}; "
+            f"q calibration error {reporting['q_calibration_error']}"
+        )
+        for row in reporting["q_calibration"]:
+            lines.append(
+                f"  q [{row['q_range'][0]:.1f}, {row['q_range'][1]:.1f}): mean q "
+                f"{row['mean_q']}, reported {row['reported_share']} (n={row['terms']})"
+            )
+    elif reporting is not None:
         lines.append(
             f"Reporting ({reporting['cases']} report-model cases): budget mean "
             f"{reporting['budget_mean']}, reported mean {reporting['reported_total_mean']} "

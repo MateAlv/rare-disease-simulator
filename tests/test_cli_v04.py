@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.4.2"
+    assert summary["simulate"]["simulator_version"] == "0.5.0"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.4.2-")
+    assert card["dataset_id"].startswith("ds-sim0.5.0-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"
@@ -200,6 +200,51 @@ def test_v042_knobs_are_counted_in_the_run_summary(v04_run, tmp_path: Path) -> N
     assert summary["noise"]["terms"] == sum(len(c.noise_phenotypes) for c in cases)
     checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
     assert checked.exit_code == 0, checked.output
+    exported = _invoke("export-training", "--cases", str(cases_path), "--output",
+                       str(tmp_path / "ds.jsonl.gz"), "--allow-dirty")
+    assert exported.exit_code == 0, exported.output
+    for record in iter_dataset(tmp_path / "ds.jsonl.gz"):
+        assert set(record["present"]) <= set(record["true_present"])
+
+
+def test_v05_independent_run_records_its_rates(v04_run, tmp_path: Path) -> None:
+    _, profiles, _ = v04_run
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({
+        "frequency.shrinkage_mean": 0.4,
+        "reporting.mode": "independent",
+        "reporting.noise_count": "proportional",
+        "reporting.noise_share": 0.24,
+        "age.duration_mean_by_onset.infantile": 9.8,
+    }), encoding="utf-8")
+    cases_path = tmp_path / "cases.jsonl"
+
+    result = _invoke(
+        "simulate", "--profiles", str(profiles), "--output", str(cases_path), *GENE_OPTIONS,
+        "--genes", "all", "--cases-per-gene", "60", "--difficulty", "medium",
+        "--calibration", str(calibration), *NOISE,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "force_cardinal is ignored" in _text(result.output)
+    summary = json.loads((tmp_path / "cases.summary.json").read_text("utf-8"))
+    cases = read_model_jsonl(cases_path, SyntheticCase)
+    reporting = summary["reporting"]
+    assert reporting["mode"] == "independent"
+    assert reporting["cases"] == len(cases)
+    assert reporting["reported_profile_mean"] == round(
+        sum(len(c.positive_phenotypes) for c in cases) / len(cases), 4
+    )
+    assert reporting["forced_min_one"] == sum(
+        p.reason == "forced_min_one" for c in cases for p in c.positive_phenotypes
+    )
+    assert 0 < reporting["true_terms_reported_share"] <= 1
+    assert reporting["q_capped_share"] is not None
+    assert summary["config"]["age"]["duration_mean_by_onset"] == {"infantile": 9.8}
+    assert all(c.metadata.report_budget is None for c in cases)
+    checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
+    assert checked.exit_code == 0, checked.output
+    assert "Independent reporting" in checked.output
     exported = _invoke("export-training", "--cases", str(cases_path), "--output",
                        str(tmp_path / "ds.jsonl.gz"), "--allow-dirty")
     assert exported.exit_code == 0, exported.output
