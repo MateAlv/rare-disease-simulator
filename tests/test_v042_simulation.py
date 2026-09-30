@@ -154,6 +154,7 @@ def test_related_noise_is_near_the_disease_and_never_annotated(ontology) -> None
             if noise.reason != RELATED_NOISE_REASON:
                 continue
             assert noise.hpo_id not in closure and noise.hpo_id not in shown
+            assert ontology.get_ancestor_set(noise.hpo_id).isdisjoint(annotated)
             seed = noise.source_hpo_id
             assert seed in annotated
             anchors = set(ontology.get_direct_parents(seed))

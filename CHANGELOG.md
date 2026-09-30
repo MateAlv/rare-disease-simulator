@@ -11,7 +11,7 @@ Candidate 2 design of `diagnostic.ar-training` ADR-0011 amendment 3 (evidence: A
 
 ### Added
 - `reporting.specialize_rate`: a reported, not generalized profile term is shown with this probability as a descendant (a child, then with probability 0.5 a grandchild) that is a phenotypic abnormality, allowed for the patient's sex, not already shown and not annotated to the profile. It fills the same slot, carries `reason: specialized` and `source_hpo_id`, and stays within `true_present`.
-- `noise.related_share`: each noise slot is, with this probability, a descendant (at most 2 levels) of a true term's parent or grandparent that the entity neither annotates nor has as an ancestor of an annotation, falling back to the vocabulary when nothing qualifies. Marked `reason: related` with `source_hpo_id` = the true term.
+- `noise.related_share`: each noise slot is, with this probability, a descendant (at most 2 levels) of a true term's parent or grandparent that the entity neither annotates nor has as an ancestor or descendant of an annotation (descendants count as specialisation, ANALYSIS-002), falling back to the vocabulary when nothing qualifies. Marked `reason: related` with `source_hpo_id` = the true term.
 - `validate`: `specialized_not_descendant_of_true_term`, `related_noise_annotated_to_entity`, and the specialised share of positives and related share of noise; related noise is exempt from the vocabulary check.
 - Run summary: `reporting.specialized` and a `noise` block (`terms`, `related`, `related_share`).
 - `tests/fixtures/v04/golden_0.4.1.jsonl.gz`: cases written by the 0.4.1 code, which the defaults must reproduce.

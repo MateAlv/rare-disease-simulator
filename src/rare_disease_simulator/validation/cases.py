@@ -478,7 +478,11 @@ def _check_case(
                 )
                 closures[key] = annotated
             for noise in related:
-                if noise.hpo_id in annotated:
+                below = (
+                    ontology is not None
+                    and not ontology.get_ancestor_set(noise.hpo_id).isdisjoint(profile_ids)
+                )
+                if noise.hpo_id in annotated or below:
                     acc.violation("related_noise_annotated_to_entity", case_id, noise.hpo_id)
 
 

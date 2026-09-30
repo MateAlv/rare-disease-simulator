@@ -1380,8 +1380,9 @@ def _related_noise_term(
     From a uniformly chosen true term, go up to a parent (uniform among
     several) or, with probability 0.5, on to one of that parent's parents;
     then pick uniformly among the ancestor's descendants at most 2 levels
-    down. The pick is never the ancestor, a term the profile annotates or an
-    ancestor of one, a shown term, a term related to a negative, or a term
+    down. The pick is never the ancestor, a term the profile annotates, an
+    ancestor or descendant of one (descendants are specialisation, not
+    related noise), a shown term, a term related to a negative, or a term
     the patient's sex rules out. None when nothing qualifies.
     """
 
@@ -1390,6 +1391,7 @@ def _related_noise_term(
         for hpo_id in model.disease_term_ids:
             closure |= ontology.get_ancestor_set(hpo_id)
         model.annotated_closure = frozenset(closure)
+    annotated = frozenset(model.disease_term_ids)
     seed = true_ids[rng.randrange(len(true_ids))]
     parents = ontology.get_direct_parents(seed)
     if not parents:
@@ -1409,6 +1411,7 @@ def _related_noise_term(
         if hpo_id != anchor
         and ontology.is_phenotypic_abnormality(hpo_id)
         and hpo_id not in model.annotated_closure
+        and ontology.get_ancestor_set(hpo_id).isdisjoint(annotated)
         and hpo_id not in shown
         and not negated.related(hpo_id)
         and sex_terms.allowed(hpo_id, None, sex)
