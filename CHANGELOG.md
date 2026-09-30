@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-30
+
+### Fixed
+- Report mode: a picked true term whose own id an earlier generalization already showed was silently skipped, so its case reported one term fewer than its budget (`reported_count_mismatch`, 622 of 486,800 cases in the first full v0.4 run). Its slot is now refilled from the remaining true terms.
+
+### Added
+- `reporting.noise_count: budget_share` with `reporting.noise_share`: each budget slot is noise with that probability, at most `k − 1`, so noise scales with the record instead of being drawn independently of it. The default stays `poisson`.
+
 ## [0.4.0] - 2026-09-30
 
 Simulator 0.4.0, the realism rebuild of `diagnostic.ar-training` ADR-0011 (motivated by ANALYSIS-001). Every learned quantity comes from the training repo's artifacts (`hpoa-recount-v1`, `genes-v2`, `report-model-v1`, `cardinal-v1`); nothing is fitted here.

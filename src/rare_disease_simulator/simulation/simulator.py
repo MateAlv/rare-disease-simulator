@@ -91,7 +91,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.4.0"
+SIMULATOR_VERSION = "0.4.1"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -705,7 +705,13 @@ def _simulate_one_case(
         # The histogram counts every present term a real record shows, noise
         # included, so noise takes its share of the budget before profile terms.
         showable = len(_noise_pool(model, patient, set(), None, noise_vocabulary, sex_terms))
-        noise_slots = min(noise_count(preset, noise_vocabulary, rng), showable)
+        if config.reporting.noise_count == "budget_share":
+            drawn = budget_share_noise_count(
+                budget, config.reporting.noise_share, noise_vocabulary, rng
+            )
+        else:
+            drawn = noise_count(preset, noise_vocabulary, rng)
+        noise_slots = min(drawn, showable)
         profile_budget = max(1, budget - noise_slots)
         if truth:
             observation = _report(
@@ -942,22 +948,20 @@ def _report(
         for t in model.terms
         if t.phenotype.sex_restriction is not None and t.phenotype.sex_restriction != patient.sex
     )
-    unreported: list[int] = []
-    for index in truth:
+
+    def emit(index: int) -> bool:
+        """Record a reported term; False when its own id is already shown, so it fills no slot."""
         term = model.terms[index]
         phenotype = term.phenotype
-        observation.present_ids.add(phenotype.hpo_id)
-        if index not in reported:
-            unreported.append(index)
-            continue
         probability = round(patient.probabilities[index], 4)
         hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng, other_sex_terms)
         if hpo_id in observed_ids:
-            if phenotype.hpo_id not in observed_ids:
-                observation.missing.append(
-                    _unobserved(phenotype, probability, status="missing", reason=MERGED_REASON)
-                )
-            continue
+            if phenotype.hpo_id in observed_ids:
+                return False
+            observation.missing.append(
+                _unobserved(phenotype, probability, status="missing", reason=MERGED_REASON)
+            )
+            return True
         observed_ids.add(hpo_id)
         observation.present_ids.add(hpo_id)
         generalized = hpo_id != phenotype.hpo_id
@@ -974,6 +978,21 @@ def _report(
                 reason="generalized" if generalized else reason,
             )
         )
+        return True
+
+    absorbed = 0
+    for index in truth:
+        observation.present_ids.add(model.terms[index].phenotype.hpo_id)
+        if index in reported and not emit(index):
+            absorbed += 1
+    # A term whose own id an earlier generalization already shows leaves its
+    # slot open; fill it from the remaining true terms.
+    while absorbed and pool:
+        chosen = pool.pop(_weighted_index([model.terms[i].report_weight for i in pool], rng))
+        reported.add(chosen)
+        if emit(chosen):
+            absorbed -= 1
+    unreported = [index for index in truth if index not in reported]
     for index in unreported:
         phenotype = model.terms[index].phenotype
         if phenotype.hpo_id in observed_ids:
@@ -1272,6 +1291,16 @@ def noise_count(
     if not noise_vocabulary or preset.noise_mean <= 0.0:
         return 0
     return _poisson(preset.noise_mean, rng)
+
+
+def budget_share_noise_count(
+    budget: int, share: float, noise_vocabulary: Sequence[NoiseTerm], rng: random.Random
+) -> int:
+    """Binomial(budget, share) noise slots, at most budget - 1; 0 without a vocabulary."""
+
+    if not noise_vocabulary or share <= 0.0 or budget <= 1:
+        return 0
+    return min(sum(1 for _ in range(budget) if rng.random() < share), budget - 1)
 
 
 def negative_count(

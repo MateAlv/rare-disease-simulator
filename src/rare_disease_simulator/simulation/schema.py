@@ -347,6 +347,17 @@ class ReportingSettings(StrictBaseModel):
         description="Report every true cardinal term (cardinal-v1) first, when the budget "
         "is at least 1.",
     )
+    noise_count: Literal["poisson", "budget_share"] = Field(
+        default="poisson",
+        description="How many budget slots noise takes: 'poisson' draws the preset's "
+        "noise_mean independently of the budget; 'budget_share' makes each of the k slots "
+        "noise with probability noise_share, at most k - 1, so noise scales with the record.",
+    )
+    noise_share: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Per-slot noise probability for noise_count 'budget_share' (the share of "
+        "a real record's present terms that the knowledge base does not explain).",
+    )
 
 
 class MissingnessSettings(StrictBaseModel):
