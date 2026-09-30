@@ -29,6 +29,7 @@ def test_full_fixture_slice_build_simulate_export(tmp_path) -> None:
         cases_per_disease_per_difficulty=10,
         difficulties=["easy"],
         seed=42,
+        reporting={"mode": "observation"},
     )
     cases = simulate_cases(profile, config)
     assert len(cases) == 10

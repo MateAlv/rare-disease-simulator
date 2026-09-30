@@ -127,6 +127,7 @@ def _config(**overrides) -> SimulationConfig:
         "seed": 11,
         "missingness": {"sex_unknown": 0.0, "age_unknown": 0.0, "onset_unknown": 0.0,
                         "no_negatives": 0.0},
+        "reporting": {"mode": "observation"},
     }
     base.update(overrides)
     return SimulationConfig.model_validate(base)
@@ -183,7 +184,7 @@ def test_same_seed_and_config_give_identical_bytes(ontology, tmp_path: Path) -> 
 def test_metadata_carries_versions_and_no_timestamp(ontology) -> None:
     case = _simulate(ontology, source_versions={"profiles_sha256": "abc"})[0]
 
-    assert case.metadata.simulator_version == "0.3.0"
+    assert case.metadata.simulator_version == "0.4.0"
     assert case.metadata.source_versions == {"profiles_sha256": "abc"}
     assert case.metadata.generated_at is None
     assert case.metadata.config_hash.startswith("sha256:")
@@ -396,7 +397,11 @@ def test_default_negative_mix_is_dominated_by_the_disease_own_terms(ontology) ->
         ],
         negative_phenotypes=[NegativePhenotypeAssociation(hpo_id="HP:0000964", label="Eczema")],
     )
-    config = SimulationConfig(cases_per_disease_per_difficulty=100, difficulties=["easy"])
+    config = SimulationConfig(
+        cases_per_disease_per_difficulty=100,
+        difficulties=["easy"],
+        reporting={"mode": "observation"},
+    )
     assert config.negatives.max_per_case == 15
     index = ConfounderIndex([rich, CONFOUNDER, UNRELATED], ontology, min_information_content=0.0)
 

@@ -33,13 +33,13 @@ from tests.test_simulation_v02 import (
     CONFOUNDER,
     TRUE,
     UNRELATED,
-    _config,
     _phenotype,
     _present_ids,
     _profile,
     _related,
     build_ontology,
 )
+from tests.test_simulation_v02 import _config as _v03_config
 
 FIXTURES = fixture_path("hpoa")
 
@@ -68,6 +68,12 @@ TARGET = GeneTarget(
 @pytest.fixture(scope="module")
 def ontology():
     return build_ontology()
+
+
+def _config(**overrides):
+    """Simulator 0.3 gene-first draws: one of the entity's profiles per case."""
+
+    return _v03_config(**{"entity_profiles": "uniform", **overrides})
 
 
 def _gene_cases(ontology, config=None, target=TARGET):

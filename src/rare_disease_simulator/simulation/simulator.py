@@ -1,4 +1,4 @@
-"""Seeded probabilistic patient simulator (v0.2).
+"""Seeded probabilistic patient simulator (v0.4).
 
 Generates synthetic clinical cases from a validated :class:`DiseaseProfile`.
 The generative model for one case (``docs/README.md`` documents every knob):
@@ -8,18 +8,25 @@ The generative model for one case (``docs/README.md`` documents every knob):
    unknown), an onset age uniform in that category's window, and a current age
    = onset + an exponential disease duration.
 2. **Truth.** Each profile phenotype gets a per-patient probability
-   ``p ~ Beta(k*mean, k*(1-mean))`` around its ADR-0007 frequency estimate
-   (unknown frequencies use a configured mean), raised with duration in
-   progressive diseases. It is eligible only if its sex restriction matches and
-   its own onset (sampled in its category window) is <= the current age;
-   antenatal and congenital terms are always eligible. Eligible terms are
-   present with probability ``p``.
-3. **Observation.** The difficulty preset decides which present terms are
-   recorded (the rest become ``missing``/``unknown``) and which are generalized
-   to a parent term. A term whose generalization is already recorded becomes
-   ``missing`` (``reason: recorded_as_generalized``), so every truly present
-   term appears in the case. Cases with no recorded term are redrawn; after
-   ``max_redraws`` the most probable eligible term is forced in.
+   ``p ~ Beta(k*mean, k*(1-mean))`` around its frequency (ADR-0007, with
+   count-based ``n/m`` shrunk toward a Beta prior per ADR-0011; unknown
+   frequencies use a configured mean), raised with duration in progressive
+   diseases. It is eligible only if its sex restriction matches and its own
+   onset (sampled in its category window) is <= the current age; antenatal and
+   congenital terms are always eligible. Eligible terms are present with
+   probability ``p``.
+3. **Reporting** (``reporting.mode: report_model``, ADR-0011). A term budget
+   ``k`` is drawn from the report model's histogram; the true cardinal terms
+   (``cardinal-v1``) are reported first, then true terms are picked without
+   replacement with probability proportional to the reporting model's score
+   until ``k`` terms are reported (all of them when ``k`` exceeds the true
+   terms). ``reporting.mode: observation`` keeps simulator 0.3's model: each
+   present term is recorded with the preset's observation rate. Either way,
+   recorded terms may be generalized to a parent term, unrecorded true terms
+   become ``missing``/``unknown``, and a term whose generalization is already
+   recorded becomes ``missing`` (``reason: recorded_as_generalized``), so every
+   truly present term appears in the case. Cases with no true term are
+   redrawn; after ``max_redraws`` the most probable eligible term is forced in.
 4. **Negatives.** 0..k "asked and absent" terms from four sources: the
    disease's own terms the patient lacks (weighted by frequency), the gene's
    other diseases' terms (gene-first mode), hallmark terms of confounder
@@ -33,10 +40,12 @@ Every case is fully determined by ``(seed, disease_id, difficulty, index)``
 and the configuration, so reruns reproduce identical bytes.
 
 **Gene-first mode** (:func:`simulate_gene_cases`) labels cases with a GNN
-gene. Each case first draws one of the gene's disease entities by
-``sim_weight`` and then one of the entity's profiles uniformly, with the key
-``(seed, "gene:" + symbol, difficulty, index)``; the entity's inheritance sets
-the sex prior.
+gene. Each case draws one of the gene's disease entities by ``sim_weight``,
+with the key ``(seed, "gene:" + symbol, difficulty, index)``, and simulates it
+from one profile merged from all the entity's profile ids
+(``entity_profiles: merged``, ADR-0011) or, as in simulator 0.3, from one of
+them drawn uniformly (``uniform``); the entity's inheritance sets the sex
+prior.
 """
 
 from __future__ import annotations
@@ -52,7 +61,9 @@ from typing import TypeVar
 from rare_disease_simulator import __version__
 from rare_disease_simulator.data_sources.gene_profiles import EntityOption, GeneTarget
 from rare_disease_simulator.data_sources.hpo import HpoOntology
+from rare_disease_simulator.profiles.frequency import beta_shrinkage_mean, pooled_counts
 from rare_disease_simulator.profiles.inheritance import SEX_LIMITED_EXPRESSION, derive_sex_bias
+from rare_disease_simulator.profiles.merge import merge_entity_profiles
 from rare_disease_simulator.profiles.schema import (
     DiseaseProfile,
     OnsetCategory,
@@ -60,12 +71,14 @@ from rare_disease_simulator.profiles.schema import (
     SexRestriction,
 )
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
+from rare_disease_simulator.simulation.reporting import Reporting
 from rare_disease_simulator.simulation.schema import (
     Age,
     CasePhenotype,
     CaseTarget,
     Difficulty,
     DifficultyPreset,
+    FrequencySettings,
     GeneratorMetadata,
     NegativeSource,
     PatientAttributes,
@@ -76,7 +89,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.3.0"
+SIMULATOR_VERSION = "0.4.0"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -101,6 +114,8 @@ GENE_ONLY_SOURCES: frozenset[NegativeSource] = frozenset({"own_gene_other_diseas
 EQUIVALENT_PROFILE_REASON = "typical_feature_absent_equivalent_profile"
 FORCED_REASON = "forced_min_one"
 MERGED_REASON = "recorded_as_generalized"
+CARDINAL_REASON = "cardinal"
+NOT_REPORTED_REASON = "not_reported"
 
 _T = TypeVar("_T")
 
@@ -112,6 +127,38 @@ class NoiseTerm:
     hpo_id: str
     label: str
     weight: float = 1.0
+
+
+class ShrinkageMeanMissing(ValueError):
+    """Beta shrinkage was asked for a count-based term without a prior mean."""
+
+
+def simulation_frequency(
+    phenotype: PhenotypeAssociation, settings: FrequencySettings
+) -> float | None:
+    """The frequency a term is simulated with; None when the profile gives none.
+
+    Count-based terms (``frequency_raw`` ``n/m``) use the configured estimator:
+    Beta shrinkage toward ``shrinkage_mean`` with ``shrinkage_strength``
+    pseudo-patients (ADR-0011) or the Jeffreys mean the profile stores
+    (ADR-0007). Other notations use the profile's estimate.
+    """
+
+    counts = pooled_counts(phenotype.frequency_raw)
+    if counts is not None and settings.count_estimator == "beta_shrinkage":
+        if settings.shrinkage_mean is None:
+            raise ShrinkageMeanMissing(
+                "frequency.shrinkage_mean is not set: supply the median count-based frequency "
+                "of hpoa-recount-v1 (config or calibration key), or set "
+                "frequency.count_estimator: jeffreys for simulator 0.3 estimates"
+            )
+        return round(
+            beta_shrinkage_mean(
+                counts[0], counts[1], settings.shrinkage_mean, settings.shrinkage_strength
+            ),
+            4,
+        )
+    return phenotype.frequency_estimate
 
 
 def config_hash(config: SimulationConfig) -> str:
@@ -205,6 +252,8 @@ class _Term:
     mean: float
     always_eligible: bool
     onset_window: tuple[float, float] | None
+    cardinal: bool = False
+    report_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -228,6 +277,7 @@ class _DiseaseModel:
     equivalent_terms: list[_Candidate] = field(default_factory=list)
     gene_other_terms: list[_Candidate] = field(default_factory=list)
     gene_first: bool = False
+    profile_ids: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -260,16 +310,19 @@ def simulate_cases(
     profile_version: str | None = None,
     source_versions: Mapping[str, str] | None = None,
     sex_terms: SexSpecificTerms | None = None,
+    reporting: Reporting | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for a single disease profile.
 
     Produces ``cases_per_disease_per_difficulty`` cases for each configured
     difficulty, in difficulty-then-index order. ``confounders`` enables the
     confounder negative source; without an ontology, the ancestor/descendant
-    checks reduce to identity checks.
+    checks reduce to identity checks. ``reporting`` is required when
+    ``reporting.mode`` is ``report_model``.
     """
 
-    model = _disease_model(profile, config, confounders)
+    _check_reporting(config, reporting)
+    model = _disease_model(profile, config, confounders, reporting, (profile.disease_id,))
     sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
     cfg_hash = config_hash(config)
     cases: list[SyntheticCase] = []
@@ -278,7 +331,7 @@ def simulate_cases(
         for index in range(config.cases_per_disease_per_difficulty):
             seed = case_seed(config.seed, profile.disease_id, difficulty, index)
             rng = random.Random(seed)
-            case = _simulate_one_case(
+            case, budget = _simulate_one_case(
                 model,
                 config=config,
                 preset=preset,
@@ -286,6 +339,7 @@ def simulate_cases(
                 ontology=ontology,
                 noise_vocabulary=noise_vocabulary or (),
                 sex_terms=sex_terms,
+                reporting=reporting,
             )
             cases.append(
                 SyntheticCase(
@@ -299,7 +353,7 @@ def simulate_cases(
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions,
+                        profile_version, source_versions, budget,
                     ),
                     **case,
                 )
@@ -318,20 +372,25 @@ def simulate_gene_cases(
     profile_version: str | None = None,
     source_versions: Mapping[str, str] | None = None,
     sex_terms: SexSpecificTerms | None = None,
+    reporting: Reporting | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for one GNN gene (gene-first mode).
 
     ``cases_per_disease_per_difficulty`` cases per difficulty. Each case draws
-    an entity of ``target`` by ``sim_weight``, then one of the entity's
-    profiles uniformly (profiles of one entity describe the same disease, so
-    none is preferred), and is labelled with the gene's v3 symbol and class
-    index. Every profile id in ``target`` must be in ``profiles``.
+    an entity of ``target`` by ``sim_weight`` and is labelled with the gene's
+    v3 symbol and class index. With ``entity_profiles: merged`` the entity is
+    simulated from one profile merged from all its profile ids
+    (``target.disease_id`` is the entity, ``target.profile_ids`` the ids
+    merged); with ``uniform``, from one of its profiles drawn uniformly. Every
+    profile id in ``target`` must be in ``profiles``.
     """
 
+    _check_reporting(config, reporting)
     sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
     cfg_hash = config_hash(config)
     models: dict[tuple[str, str], _DiseaseModel] = {}
     entity_weights = [entity.sim_weight for entity in target.entities]
+    merged = config.entity_profiles == "merged"
     cases: list[SyntheticCase] = []
     for difficulty in config.difficulties:
         preset = config.presets[difficulty]
@@ -339,14 +398,18 @@ def simulate_gene_cases(
             seed = case_seed(config.seed, f"gene:{target.symbol}", difficulty, index)
             rng = random.Random(seed)
             entity = target.entities[_weighted_index(entity_weights, rng)]
-            profile_id = entity.profile_ids[rng.randrange(len(entity.profile_ids))]
+            profile_id = (
+                "+".join(entity.profile_ids)
+                if merged
+                else entity.profile_ids[rng.randrange(len(entity.profile_ids))]
+            )
             model = models.get((entity.entity, profile_id))
             if model is None:
                 model = _gene_model(
-                    target, entity, profiles[profile_id], profiles, config, confounders, ontology
+                    target, entity, profile_id, profiles, config, confounders, ontology, reporting
                 )
                 models[(entity.entity, profile_id)] = model
-            case = _simulate_one_case(
+            case, budget = _simulate_one_case(
                 model,
                 config=config,
                 preset=preset,
@@ -354,6 +417,7 @@ def simulate_gene_cases(
                 ontology=ontology,
                 noise_vocabulary=noise_vocabulary or (),
                 sex_terms=sex_terms,
+                reporting=reporting,
             )
             profile = model.profile
             cases.append(
@@ -365,15 +429,37 @@ def simulate_gene_cases(
                         gene=target.symbol,
                         gene_label=target.index,
                         entity_id=entity.entity,
+                        profile_ids=list(model.profile_ids) if model.profile_ids else None,
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions,
+                        profile_version, source_versions, budget,
                     ),
                     **case,
                 )
             )
     return cases
+
+
+def entity_profile(
+    entity: EntityOption,
+    profiles: Mapping[str, DiseaseProfile],
+    ontology: HpoOntology | None = None,
+) -> DiseaseProfile:
+    """The merged profile a gene-first case of ``entity`` is simulated from."""
+
+    merged, _ = merge_entity_profiles(
+        entity.entity, [profiles[profile_id] for profile_id in entity.profile_ids], ontology
+    )
+    return merged
+
+
+def _check_reporting(config: SimulationConfig, reporting: Reporting | None) -> None:
+    if config.reporting.mode == "report_model" and reporting is None:
+        raise ValueError(
+            "reporting.mode is 'report_model' but no report model was given; pass a "
+            "report-model-v1 file, or set reporting.mode: observation for simulator 0.3 emission"
+        )
 
 
 def _metadata(
@@ -384,6 +470,7 @@ def _metadata(
     sex_key: SexPriorKey,
     profile_version: str | None,
     source_versions: Mapping[str, str] | None,
+    report_budget: int | None = None,
 ) -> GeneratorMetadata:
     return GeneratorMetadata(
         generator_version=__version__,
@@ -394,6 +481,7 @@ def _metadata(
         seed=config.seed,
         case_seed=seed,
         sex_prior_key=sex_key,
+        report_budget=report_budget,
         difficulty=difficulty,
     )
 
@@ -406,37 +494,52 @@ def case_seed(seed: int, key: str, difficulty: Difficulty, index: int) -> int:
 
 
 def _disease_model(
-    profile: DiseaseProfile, config: SimulationConfig, confounders: ConfounderIndex | None
+    profile: DiseaseProfile,
+    config: SimulationConfig,
+    confounders: ConfounderIndex | None,
+    reporting: Reporting | None = None,
+    cardinal_ids: Sequence[str] = (),
+    confounder_exclude: frozenset[str] | None = None,
 ) -> _DiseaseModel:
     windows = config.age.onset_years
-    terms = [
-        _Term(
-            phenotype=phenotype,
-            mean=(
-                phenotype.frequency_estimate
-                if phenotype.frequency_estimate is not None
-                else config.frequency.unknown_frequency
-            ),
-            always_eligible=phenotype.onset == "antenatal"
-            or phenotype.onset_hpo_id == CONGENITAL_ONSET,
-            onset_window=windows.get(phenotype.onset) if phenotype.onset != "unknown" else None,
-        )
-        for phenotype in profile.phenotypes
-    ]
-    confounder_terms = (
-        [
-            _Candidate(
-                hpo_id=term.hpo_id,
-                label=term.label,
-                weight=term.weight,
-                sex_restriction=term.sex_restriction,
-                reason=f"confounder:{term.confounder_id}",
+    cardinal = reporting.cardinal_terms(cardinal_ids) if reporting is not None else frozenset()
+    terms: list[_Term] = []
+    for phenotype in profile.phenotypes:
+        frequency = simulation_frequency(phenotype, config.frequency)
+        is_cardinal = phenotype.hpo_id in cardinal
+        terms.append(
+            _Term(
+                phenotype=phenotype,
+                mean=frequency if frequency is not None else config.frequency.unknown_frequency,
+                always_eligible=phenotype.onset == "antenatal"
+                or phenotype.onset_hpo_id == CONGENITAL_ONSET,
+                onset_window=(
+                    windows.get(phenotype.onset) if phenotype.onset != "unknown" else None
+                ),
+                cardinal=is_cardinal,
+                report_weight=(
+                    reporting.scorer.score(phenotype.hpo_id, frequency, is_cardinal)
+                    if reporting is not None
+                    else 1.0
+                ),
             )
-            for term in confounders.candidate_terms(profile.disease_id)
-        ]
-        if confounders is not None
-        else []
-    )
+        )
+    if confounders is None:
+        candidates = []
+    elif confounder_exclude is None:
+        candidates = confounders.candidate_terms(profile.disease_id)
+    else:
+        candidates = confounders.candidate_terms_for_profile(profile, confounder_exclude)
+    confounder_terms = [
+        _Candidate(
+            hpo_id=term.hpo_id,
+            label=term.label,
+            weight=term.weight,
+            sex_restriction=term.sex_restriction,
+            reason=f"confounder:{term.confounder_id}",
+        )
+        for term in candidates
+    ]
     not_terms = [
         _Candidate(
             hpo_id=negative.hpo_id, label=negative.label, weight=1.0, reason="not_annotation"
@@ -456,15 +559,30 @@ def _disease_model(
 def _gene_model(
     target: GeneTarget,
     entity: EntityOption,
-    profile: DiseaseProfile,
+    profile_id: str,
     profiles: Mapping[str, DiseaseProfile],
     config: SimulationConfig,
     confounders: ConfounderIndex | None,
     ontology: HpoOntology | None,
+    reporting: Reporting | None,
 ) -> _DiseaseModel:
-    """A disease model for a gene-first case: entity sex prior and gene-level pools."""
+    """A disease model for a gene-first case: entity sex prior and gene-level pools.
 
-    model = _disease_model(profile, config, confounders)
+    A merged model (``profile_id`` joins the entity's ids with ``+``) never
+    takes a confounder from the entity's own profiles, which describe the
+    same disease.
+    """
+
+    merged = config.entity_profiles == "merged"
+    if merged:
+        profile = entity_profile(entity, profiles, ontology)
+        model = _disease_model(
+            profile, config, confounders, reporting, entity.profile_ids,
+            confounder_exclude=frozenset(entity.profile_ids),
+        )
+    else:
+        profile = profiles[profile_id]
+        model = _disease_model(profile, config, confounders, reporting, entity.profile_ids)
     unknown = config.frequency.unknown_frequency
     own_terms = _entity_terms(entity, profiles, unknown)
     equivalent = [
@@ -522,6 +640,7 @@ def _gene_model(
         equivalent_terms=equivalent,
         gene_other_terms=gene_other,
         gene_first=True,
+        profile_ids=entity.profile_ids if merged else None,
     )
 
 
@@ -559,16 +678,35 @@ def _simulate_one_case(
     ontology: HpoOntology | None,
     noise_vocabulary: Sequence[NoiseTerm],
     sex_terms: SexSpecificTerms,
-) -> dict[str, object]:
+    reporting: Reporting | None = None,
+) -> tuple[dict[str, object], int | None]:
     patient = _sample_patient(model, config, rng, sex_terms)
     observation: _Observation | None = None
-    for _ in range(config.max_redraws):
-        if not any(patient.eligible):
-            patient = _sample_patient(model, config, rng, sex_terms)
-            continue
-        observation = _observe(model, patient, preset, rng, ontology)
-        if observation.positives:
-            break
+    budget: int | None = None
+    if config.reporting.mode == "report_model":
+        assert reporting is not None
+        truth: list[int] = []
+        for _ in range(config.max_redraws):
+            if not any(patient.eligible):
+                patient = _sample_patient(model, config, rng, sex_terms)
+                continue
+            truth = _sample_truth(patient, rng)
+            if truth:
+                break
+        budget = reporting.budget.draw(rng)
+        if truth:
+            observation = _report(
+                model, patient, truth, budget, config.reporting.force_cardinal, preset, rng,
+                ontology,
+            )
+    else:
+        for _ in range(config.max_redraws):
+            if not any(patient.eligible):
+                patient = _sample_patient(model, config, rng, sex_terms)
+                continue
+            observation = _observe(model, patient, preset, rng, ontology)
+            if observation.positives:
+                break
     if observation is None or not observation.positives:
         patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
@@ -587,7 +725,7 @@ def _simulate_one_case(
     hide_negatives = rng.random() < config.missingness.no_negatives
 
     onset_age = Age(value=round(patient.onset_age, 2), unit="years")
-    return {
+    case = {
         "patient": PatientAttributes(
             sex="unknown" if hide_sex else patient.sex,
             age=None if hide_age else Age(value=round(patient.age, 2), unit="years"),
@@ -600,6 +738,7 @@ def _simulate_one_case(
         "unknown_phenotypes": observation.unknown,
         "noise_phenotypes": noise,
     }
+    return case, budget
 
 
 def _sample_patient(
@@ -722,6 +861,102 @@ def _observe(
         elif rng.random() < preset.missing_vs_unknown_split:
             observation.missing.append(
                 _unobserved(phenotype, probability, status="missing", reason="not_recorded")
+            )
+        else:
+            observation.unknown.append(
+                _unobserved(
+                    phenotype, probability, status="unknown", reason="not_enough_information"
+                )
+            )
+    return observation
+
+
+def _sample_truth(patient: _Patient, rng: random.Random) -> list[int]:
+    """Indices of the profile terms the patient truly has, in profile order."""
+
+    return [
+        index
+        for index, eligible in enumerate(patient.eligible)
+        if eligible and rng.random() < patient.probabilities[index]
+    ]
+
+
+def _report(
+    model: _DiseaseModel,
+    patient: _Patient,
+    truth: Sequence[int],
+    budget: int,
+    force_cardinal: bool,
+    preset: DifficultyPreset,
+    rng: random.Random,
+    ontology: HpoOntology | None,
+) -> _Observation:
+    """Record ``budget`` of the true terms: cardinal ones first, the rest by report score.
+
+    Every true cardinal term is reported when the budget is at least 1, even
+    beyond the budget; the remaining slots are filled without replacement with
+    probability proportional to each term's reporting-model score. Reported
+    terms may be generalized to a parent; unreported ones become ``missing``
+    (``not_reported``) or ``unknown`` by the preset's split.
+    """
+
+    reported: set[int] = set()
+    if force_cardinal and budget > 0:
+        reported = {index for index in truth if model.terms[index].cardinal}
+    pool = [index for index in truth if index not in reported]
+    slots = budget - len(reported)
+    while slots > 0 and pool:
+        chosen = pool.pop(_weighted_index([model.terms[i].report_weight for i in pool], rng))
+        reported.add(chosen)
+        slots -= 1
+
+    observation = _Observation()
+    observed_ids: set[str] = set()
+    other_sex_terms = frozenset(
+        t.phenotype.hpo_id
+        for t in model.terms
+        if t.phenotype.sex_restriction is not None and t.phenotype.sex_restriction != patient.sex
+    )
+    unreported: list[int] = []
+    for index in truth:
+        term = model.terms[index]
+        phenotype = term.phenotype
+        observation.present_ids.add(phenotype.hpo_id)
+        if index not in reported:
+            unreported.append(index)
+            continue
+        probability = round(patient.probabilities[index], 4)
+        hpo_id, label = _maybe_generalize(phenotype, preset, ontology, rng, other_sex_terms)
+        if hpo_id in observed_ids:
+            if phenotype.hpo_id not in observed_ids:
+                observation.missing.append(
+                    _unobserved(phenotype, probability, status="missing", reason=MERGED_REASON)
+                )
+            continue
+        observed_ids.add(hpo_id)
+        observation.present_ids.add(hpo_id)
+        generalized = hpo_id != phenotype.hpo_id
+        reason = CARDINAL_REASON if term.cardinal else None
+        observation.positives.append(
+            CasePhenotype(
+                hpo_id=hpo_id,
+                label=label,
+                status="positive",
+                observed=True,
+                source_probability=probability,
+                source_hpo_id=phenotype.hpo_id if generalized else None,
+                simulated_origin="disease_profile",
+                reason="generalized" if generalized else reason,
+            )
+        )
+    for index in unreported:
+        phenotype = model.terms[index].phenotype
+        if phenotype.hpo_id in observed_ids:
+            continue
+        probability = round(patient.probabilities[index], 4)
+        if rng.random() < preset.missing_vs_unknown_split:
+            observation.missing.append(
+                _unobserved(phenotype, probability, status="missing", reason=NOT_REPORTED_REASON)
             )
         else:
             observation.unknown.append(

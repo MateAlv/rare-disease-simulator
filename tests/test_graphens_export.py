@@ -15,6 +15,7 @@ def _cases():
         cases_per_disease_per_difficulty=4,
         difficulties=["easy"],
         seed=3,
+        reporting={"mode": "observation"},
     )
     return simulate_cases(profile, config)
 

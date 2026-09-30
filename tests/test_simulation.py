@@ -26,6 +26,7 @@ def _config(**overrides) -> SimulationConfig:
         "cases_per_disease_per_difficulty": 5,
         "difficulties": ["easy", "medium", "hard"],
         "seed": 7,
+        "reporting": {"mode": "observation"},
     }
     base.update(overrides)
     return SimulationConfig(**base)

@@ -3,6 +3,15 @@
 mvp:
   diseases: []
 
+# Simulator 0.3 behaviour; the v0.4 model is exercised with its own artifacts
+# (tests/fixtures/v04).
+simulation:
+  entity_profiles: uniform
+  frequency:
+    count_estimator: jeffreys
+  reporting:
+    mode: observation
+
 sources:
   hpo_json_path: tests/fixtures/hpoa/hp_mini.json
   phenotype_annotation_path: tests/fixtures/hpoa/phenotype_mini.hpoa

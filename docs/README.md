@@ -652,6 +652,9 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `presets.hard.ontology_smoothing_rate` | float | `0.35` |
 | `frequency.concentration` | float | `8.0` |
 | `frequency.unknown_frequency` | float | `0.5` |
+| `frequency.count_estimator` | "beta_shrinkage" / "jeffreys" | `"beta_shrinkage"` |
+| `frequency.shrinkage_mean` | float or null | `null` |
+| `frequency.shrinkage_strength` | float | `2.0` |
 | `sex.p_male.male_limited` | float | `1.0` |
 | `sex.p_male.female_limited` | float | `0.0` |
 | `sex.p_male.male_biased` | float | `0.9` |
@@ -695,6 +698,9 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `missingness.age_unknown` | float | `0.2` |
 | `missingness.onset_unknown` | float | `0.3` |
 | `missingness.no_negatives` | float | `0.2` |
+| `entity_profiles` | "merged" / "uniform" | `"merged"` |
+| `reporting.mode` | "report_model" / "observation" | `"report_model"` |
+| `reporting.force_cardinal` | bool | `true` |
 | `max_redraws` | int | `20` |
 | `noise.vocabulary_path` | path | `null` |
 
