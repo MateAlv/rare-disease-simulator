@@ -5,6 +5,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-30
+
+Simulator 0.4.0, the realism rebuild of `diagnostic.ar-training` ADR-0011 (motivated by ANALYSIS-001). Every learned quantity comes from the training repo's artifacts (`hpoa-recount-v1`, `genes-v2`, `report-model-v1`, `cardinal-v1`); nothing is fitted here.
+
+### Added
+- Merged entity profiles (`profiles/merge.py`, `entity_profiles: merged`): a gene-first case simulates its entity from one profile merged from all the entity's `profile_ids`. Terms are unioned; counts are pooled and win over percentages, which win over categories (so an Orphanet category never exceeds a disagreeing count-based estimate; capped cases are counted); sex restrictions survive only when all profiles agree; each term keeps its earliest onset; disease onsets are averaged, inheritance is unioned. Cases carry `target.profile_ids`, and `target.disease_id` is the entity. The run summary's `entity_profiles` block counts what merging did.
+- Beta shrinkage of count-based frequencies (`frequency.count_estimator: beta_shrinkage`, `frequency.shrinkage_mean`, `frequency.shrinkage_strength` = 2): `(n + s·μ₀)/(m + s)`, with μ₀ the median count-based frequency of `hpoa-recount-v1` supplied by the training repo. There is no built-in μ₀; `simulate` refuses to run without it when a profile term is count-based.
+- Truth, then reporting (`reporting.mode: report_model`): the true phenotype is sampled as before; a term budget is drawn from `report-model-v1`'s histogram (its 0 bin dropped), true cardinal terms from `cardinal-v1` are reported first (`reporting.force_cardinal`), and the rest are drawn without replacement in proportion to the reporting model's logistic score. Unreported true terms stay in the case as `missing` (`not_reported`) or `unknown`. Cases record `metadata.report_budget`; reported cardinal positives carry `reason: cardinal`.
+- `simulation/reporting.py`: strict readers for `report-model-v1` (JSON schema `report-model` v1; features `frequency`, `information_content`, `ancestor_count`, `log_reportability`, `cardinal_flag`) and `cardinal-v1` (TSV `disease_id, hpo_id, kind, source`); any mismatch fails at load time.
+- `simulate --report-model/--cardinal`, with `sources.report_model_path`, `sources.cardinal_path` and optional `sources.report_model_sha256`/`sources.cardinal_sha256` pins. The run summary and dataset card record both files' sha256; the run summary also records the model id, the effective budget distribution and the cardinal counts (`reporting`).
+- `validate` for report-model cases: `budget_outside_histogram`, `reported_count_mismatch` (reported ≠ min(true, max(budget, true cardinal))), `cardinal_not_reported`, and a `reporting` section comparing drawn budgets and reported counts with the histogram. `validate --report-model/--cardinal` override the run summary's files.
+- Build summary: `rows.phenotype_rows_used(_with_onset)` and `rows.recounted(_with_onset)` for `hpoa-recount-v1` builds (rows citing `R1-TRAIN:`).
+- `ConfounderIndex.candidate_terms_for_profile`: confounders of a merged entity, never its own profiles.
+
+### Changed
+- `SIMULATOR_VERSION` 0.4.0; the defaults are the v0.4 model. `reporting.mode: observation`, `frequency.count_estimator: jeffreys` and `entity_profiles: uniform` restore simulator 0.3.
+- `simulate` needs a report model (and a cardinal file while `force_cardinal` is on) in the default `report_model` mode, and stops before generating when an input is missing.
+- `validate` checks merged cases against the profile merged from their `profile_ids`, and calibration expects the frequency the run simulated with (the count estimator), not the stored Jeffreys mean.
+- Export v2: with merged profiles `profile_id` is the entity. The record format is unchanged.
+
+## [0.3.0] - 2026-09-29
+
+Simulator 0.3.x as merged on `main` (not tagged).
+
 ### Added
 - Gene-first simulation (simulator 0.3.0): `simulate --genes all|LIST|FILE --gene-profiles genes.json.gz --gnn-genes genes.json --cases-per-gene N`.
   - One case set per GNN gene, in class-index order.

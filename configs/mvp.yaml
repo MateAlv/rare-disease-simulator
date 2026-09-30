@@ -48,6 +48,14 @@ sources:
   gene_profiles_sha256: 58192f3b54e96752206b5a31214f07b71254eacab8238b09647dc449be94ac70
   # GNN v3.0 gene vocabulary (5,229 classes, index 0 is the placeholder "-").
   gnn_genes_path: ../diagnostic.ar-training/data/interim/genphenia-v3.0/checkpoints/graphens_best_model/genes.json
+  # Simulator v0.4 (ADR-0011) reads report-model-v1 and cardinal-v1 from
+  # diagnostic.ar-training; set these (and their *_sha256 pins from the
+  # manifests) once the artifacts are released. Until then simulate needs
+  # --report-model/--cardinal, or reporting.mode: observation.
+  # report_model_path: ../diagnostic.ar-training/<report-model-v1 JSON>
+  # report_model_sha256: <from data/manifests/report-model-v1.json>
+  # cardinal_path: ../diagnostic.ar-training/<cardinal-v1 TSV>
+  # cardinal_sha256: <from data/manifests/cardinal-v1.json>
   negative_phenotype_annotation_path: data/raw/hpo/negative_phenotype_annotation.tab
   orphadata_dir: data/raw/orphadata
   mondo_path: data/raw/mondo/mondo.json
@@ -61,6 +69,8 @@ llm:
   temperature: 0.0
 
 simulation:
+  # frequency.shrinkage_mean (the median count-based frequency of
+  # hpoa-recount-v1) comes from the training repo, e.g. in a calibration file.
   difficulties:
     - easy
     - medium

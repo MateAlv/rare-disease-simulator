@@ -178,6 +178,8 @@ The summary reports:
 
 Building without a mask is allowed, but it prints a warning.
 
+**Recounting instead of dropping (ADR-0011).** For simulator v0.4 the training repo builds `hpoa-recount-v1`, a file with the columns of `phenotype.hpoa` in which each row citing a held-out publication is replaced by one row whose frequency is `n/m` recounted over the R1-train phenopackets of that disease (`reference` `R1-TRAIN:r1-v1`, evidence `PCS`, and the aggregated phenopacket onset in the `onset` column when there is one), or dropped when `m < 3`. It is already masked, so it is passed as `--hpoa` (or `sources.phenotype_annotation_path`) without `--exclude-pmids`; the builder reads it like any HPOA file. The summary counts `rows.recounted` and `rows.recounted_with_onset` next to `rows.phenotype_rows_used` and `rows.phenotype_rows_used_with_onset`.
+
 ### Annotation holdout
 
 `--drop-annotations holdout.tsv` removes every listed (disease, term) **positive** annotation before profiles are built. A row matches by its term as written or as resolved through `hp.json`, so an obsolete id replaced by a listed term is dropped too. `NOT` and `Excluded` rows are kept. The file comes from `diagnostic.ar-training`, never from this repo.
@@ -233,6 +235,8 @@ Both this repo and `diagnostic.ar-training` read HPOA frequencies the same way, 
 - **Negation.** Only `NOT` or `Excluded` negate a term. `0/m` means "not seen in m patients", a low frequency.
 - **Category of a point.** ≥ 0.99 obligate, ≥ 0.80 very frequent, ≥ 0.30 frequent, ≥ 0.05 occasional, otherwise very rare. A positive annotation is never `excluded`.
 - **Counts above the denominator** (`5/3`) are capped at the denominator; unparseable values are counted in the summary (`rows.unparsed_frequency`) and ignored.
+
+Profiles keep these ADR-0007 estimates. From simulator 0.4 the simulator replaces the Jeffreys mean of a count-based term with a Beta shrinkage estimate (ADR-0011; see [Count-based shrinkage](#count-based-shrinkage)).
 
 ### OMIM ↔ ORPHA mapping
 
@@ -460,6 +464,8 @@ Planned training progression:
 
 `simulate` turns profiles into synthetic cases. Code: `simulation/simulator.py`, `simulation/confounders.py`, `simulation/sampling.py`; every knob is a field of `SimulationConfig` (`simulation:` in the YAML config, `simulation/schema.py`), and none is fitted to R1. The training repo calibrates them on R1-train only.
 
+Simulator 0.4 keeps this model for the patient and the truth, and changes three things by default, described in [Simulator v0.4](#simulator-v04-adr-0011): count-based frequencies are shrunk (step 4), gene-first entities are simulated from a merged profile, and step 7's observation is replaced by the report model. `reporting.mode: observation`, `frequency.count_estimator: jeffreys` and `entity_profiles: uniform` restore the 0.3 behaviour described here.
+
 ### Generative model of one case
 
 1. **Sex.** `P(male)` depends on the disease's sex prior key (`sex_prior_key`):
@@ -591,12 +597,12 @@ The GNN predicts genes, so its training data is simulated one gene at a time (si
 **One case.** The per-case RNG is seeded from `(seed, "gene:" + v3 symbol, difficulty, index)`:
 
 1. draw an entity of the gene with probability proportional to its `sim_weight` (ADR-0008: validity × √(1 + ClinVar P/LP alleles), normalised over the simulable entities);
-2. draw one of the entity's `profile_ids` uniformly. Profiles of one entity are the OMIM and ORPHA ids of the same disease, so no source is preferred;
+2. build the entity's profile: by default (`entity_profiles: merged`, simulator 0.4) one profile merged from all its `profile_ids` (see [Merged entity profiles](#merged-entity-profiles)); with `entity_profiles: uniform` (simulator 0.3), one of its `profile_ids` drawn uniformly;
 3. simulate the case from that profile as in disease-first mode, except for:
    - **sex prior.** It comes from the entity's `inheritance` (ClinGen mode of inheritance when curated, else HPOA), through the same sex-bias rule as the profiles. The profile's male-/female-limited expression terms are kept, because only HPOA records them. An entity without inheritance uses the profile's prior;
    - **negatives.** The gene-level pools described in [Negatives](#negatives-asked-and-absent).
 
-Cases are labelled with the GNN's spelling (`target.gene`, e.g. `BVES` for approved `POPDC1`) and class index (`target.gene_label`); `target.entity_id` is the entity and `target.disease_id` the profile drawn. `metadata.case_seed` and `metadata.sex_prior_key` record the case's seed and sex prior (in both modes). The case id is `synthetic-gene-<symbol>-<difficulty>-<index>`.
+Cases are labelled with the GNN's spelling (`target.gene`, e.g. `BVES` for approved `POPDC1`) and class index (`target.gene_label`); `target.entity_id` is the entity. With merged profiles `target.disease_id` is the entity too and `target.profile_ids` lists the ids merged; with uniform draws `target.disease_id` is the profile drawn. `metadata.case_seed` and `metadata.sex_prior_key` record the case's seed and sex prior (in both modes). The case id is `synthetic-gene-<symbol>-<difficulty>-<index>`.
 
 ```bash
 rare-disease-simulator build-profiles --from-hpoa \
@@ -607,6 +613,110 @@ rare-disease-simulator simulate --profiles outputs/profiles.jsonl --genes all \
 ```
 
 `--cases-per-gene` sets `cases_per_disease_per_difficulty`, which is per gene in this mode. Gene-first mode does not take `--labels`, `--disease-ids`, `--sample-diseases` or `--cases-per-disease`.
+
+## Simulator v0.4 (ADR-0011)
+
+ANALYSIS-001 (`diagnostic.ar-training/docs/analyses/ANALYSIS-001-dataset-realism.md`) found the 0.3 cases internally consistent but not realistic per disease: rich profiles over-emitted, cardinal features were under-emitted, weak counts were taken at face value and an entity's OMIM and ORPHA profiles were picked at random. ADR-0011 (`diagnostic.ar-training/docs/decisions/0011-simulator-v04.md`) rebuilds the emission on four artifacts the training repo fits on R1-train only (`hpoa-recount-v1`, `genes-v2`, `report-model-v1`, `cardinal-v1`). Nothing in this repo is fitted; every learned quantity is read from those files, and their paths and sha256 go into the run summary and the dataset card. `SIMULATOR_VERSION` is `0.4.0`.
+
+| Input | Option | Config key | Needed |
+| --- | --- | --- | --- |
+| `hpoa-recount-v1` | `build-profiles --hpoa` | `sources.phenotype_annotation_path` | for v0.4 profiles ([Recounting](#masking-rule)) |
+| `genes-v2` | `build-profiles/simulate --gene-profiles` | `sources.gene_profiles_path` (+ `sources.gene_profiles_sha256`) | gene-first mode; read like `genes-v1` (the extra `r1_train_patients` field is ignored, weights come in `sim_weight`) |
+| `report-model-v1` | `simulate/validate --report-model` | `sources.report_model_path` (+ `sources.report_model_sha256`) | `reporting.mode: report_model` (default) |
+| `cardinal-v1` | `simulate/validate --cardinal` | `sources.cardinal_path` (+ `sources.cardinal_sha256`) | `reporting.force_cardinal: true` (default) |
+| median count-based frequency of `hpoa-recount-v1` | `--calibration` key or config | `frequency.shrinkage_mean` | `frequency.count_estimator: beta_shrinkage` (default) with any count-based term |
+
+A `*_sha256` key pins the configured file, as for the gene profiles: `simulate` refuses a file with another hash (a path given on the command line is recorded, not checked). `simulate` stops before generating anything when an input the config needs is missing.
+
+### Merged entity profiles
+
+Code: `profiles/merge.py`. In gene-first mode each case simulates the drawn entity from one profile merged from all its `profile_ids` (`entity_profiles: merged`, default):
+
+- **Terms:** the union.
+- **Frequency:** the ADR-0007 notations of all profiles are pooled with the usual precedence: counts (summed `n/m`) over percentages over categories. A count that two profiles repeat with the same references is counted once. An Orphanet category is capped at the count-based estimate when both exist and differ by more than 0.3; with this precedence the count-based estimate always wins, so the cap always holds, and the run summary counts how often it bound (`entity_profiles.category_capped`). A profile term without HPOA notation contributes its point estimate as a percentage.
+- **Sex restriction:** kept only when every profile that has the term names the same sex (the builder's rule for HPOA rows); otherwise dropped and counted (`sex_restriction_dropped`). The other sex's anatomy anchors still apply.
+- **Phenotype onset:** the earliest onset any profile gives the term (the builder's rule for rows), so a feature one source reports early is never gated away; conflicts are counted.
+- **Disease onset:** the mean of the profiles' onset distributions (profiles without onset are left out); the modal category, ties to the earliest.
+- **Inheritance and sex bias:** the union of the profiles' modes of inheritance, with the sex bias derived again from it; the entity's own inheritance still sets the sex prior.
+- **Progression:** the shared value, `variable` when the profiles disagree.
+- **Negatives:** the union of `NOT` terms that no profile annotates as present.
+- A single-profile entity keeps its profile as it is.
+
+The merged profile's `disease_id` is the entity. Its confounders are ranked with the index's information content and never include the entity's own profiles; the equivalent-profile negative pool is empty, since the merged profile already holds those terms. The run summary's `entity_profiles` block sums the merge counters over the simulated entities (entities by number of profiles, terms, terms added over the largest profile, frequency basis, capped categories, dropped restrictions, onset conflicts).
+
+### Count-based shrinkage
+
+A count-based term (`frequency_raw` `n/m`, pooled) is simulated with the Beta posterior mean `(n + s·μ₀) / (m + s)` (`frequency.count_estimator: beta_shrinkage`, default), where `s` = `frequency.shrinkage_strength` = 2 pseudo-patients and μ₀ = `frequency.shrinkage_mean`, the median count-based frequency of `hpoa-recount-v1` supplied by the training repo. There is no built-in μ₀: `simulate` refuses to run while it is unset and some profile term is count-based. With μ₀ = 0.4, `1/1` becomes 0.6 instead of Jeffreys' 0.75. `frequency.count_estimator: jeffreys` keeps the profiles' ADR-0007 estimates (simulator 0.3). This amends ADR-0007 for simulator 0.4 onward; profiles still store the ADR-0007 estimate, and `validate` calibrates against the estimator the run used.
+
+### Truth, then reporting
+
+Code: `_sample_truth` and `_report` in `simulation/simulator.py`, `simulation/reporting.py`.
+
+1. **Truth**, as before: sex, onset, age, per-patient probabilities, sex restrictions and onset gating decide the terms the patient has. Every true term stays in the case (reported as a positive, or `missing`/`unknown`), so export v2's `true_present` keeps its meaning.
+2. **Budget:** `k` is drawn from `report-model-v1`'s histogram of reported present terms per R1-train case. The 0 bin is dropped and the rest renormalised, because every case shows at least one positive (export v2 requires one). The case records `metadata.report_budget`.
+3. **Cardinal terms first** (`reporting.force_cardinal: true`, default): when `k ≥ 1`, every true term that `cardinal-v1` lists under any of the entity's profile ids is reported, even beyond `k`.
+4. **The rest:** true terms are picked without replacement with probability proportional to the reporting model's score until `k` terms are reported; when `k` exceeds the true terms, all are reported. So the reported count is `min(true terms, max(k, true cardinal terms))`.
+5. **Noise per calibration**, unchanged: reported terms are generalized to a parent with the preset's `ontology_smoothing_rate`, unreported true terms become `missing` (`reason: not_reported`) or `unknown` by `missing_vs_unknown_split`, and noise terms, negatives and covariate missingness follow as before. The preset's `positive_observation_rate` and `cardinal_observation_boost` only act in `reporting.mode: observation`. Negatives are unchanged: export v2's `excluded` stays the simulator's own asked-and-absent terms (interviews and S3 are downstream).
+
+A patient with no true term is redrawn as before, then forced (`forced_min_one`). Reported cardinal positives carry `reason: cardinal`.
+
+**`report-model-v1` format** (`simulation/reporting.py`, class `ReportModel`). A JSON object; the loader rejects a missing or unknown key, an unknown feature kind, duplicate features or a bad value:
+
+```json
+{
+  "format": "report-model", "format_version": 1,
+  "artifact_id": "report-model-v1",
+  "link": "logistic", "intercept": -2.0,
+  "features": [
+    {"name": "frequency", "kind": "frequency", "coefficient": 0.8, "unknown_value": 0.5},
+    {"name": "ic", "kind": "information_content", "coefficient": 0.1,
+     "source": "table", "missing_value": 0.0},
+    {"name": "ancestors", "kind": "ancestor_count", "coefficient": -0.02, "include_self": false},
+    {"name": "reportability", "kind": "log_reportability", "coefficient": 0.9,
+     "pseudocount": 1.0, "normalize": true},
+    {"name": "cardinal", "kind": "cardinal_flag", "coefficient": 1.2}
+  ],
+  "tables": {"information_content": {"HP:0001250": 3.1}},
+  "reportability": {"closure": "ancestors", "patients": 5000, "counts": {"HP:0001250": 812}},
+  "term_budget": {"histogram": {"0": 3, "1": 40, "2": 55, "3": 61}},
+  "provenance": {}, "notes": null
+}
+```
+
+Every feature may add `center` and `scale` (defaults 0 and 1): its value enters as `(x − center) / scale`. The score is `1 / (1 + exp(−(intercept + Σ coefficient · value)))`. Feature values:
+
+| Kind | Value |
+| --- | --- |
+| `frequency` | the term's simulation frequency (merged, then the count estimator); `unknown_value` for a term without one (null: `frequency.unknown_frequency`) |
+| `information_content` | `source: table`: `tables.information_content[term]`, else `missing_value`. `source: profiles` (with `log_base` `"e"` or `"2"`): `−log(share of the loaded profiles annotating the term or a descendant)`, else `missing_value` |
+| `ancestor_count` | the number of the term's `hp.json` ancestors, plus one with `include_self` (needs `hp.json`) |
+| `log_reportability` | `ln(c + pseudocount)`, with `c` the term's count in `reportability.counts` (0 when absent), minus `ln(patients + pseudocount)` when `normalize` |
+| `cardinal_flag` | 1 when the term is cardinal for the entity, else 0 |
+
+**`cardinal-v1` format.** A TSV with exactly the header `disease_id`, `hpo_id`, `kind`, `source`; `kind` is `diagnostic_criterion`, `pathognomonic` or `cardinal_proxy`; ids are `OMIM:`/`ORPHA:`/`DECIPHER:` and `HP:nnnnnnn`. Obsolete or alternative term ids resolve through `hp.json`; unresolvable rows are dropped and counted. A term is cardinal for an entity when any of its profile ids lists it (in disease-first mode, the profile's own id).
+
+The run summary's `reporting` block records the mode, the model id, features and intercept, the effective budget distribution and its mean, the dropped 0-bin cases, and the cardinal file's counts.
+
+### Age dependence
+
+Truth is gated by age as in simulator 0.3: a term with a per-phenotype onset is present only when an onset age drawn in its category window is at most the patient's age (antenatal and congenital terms always qualify). The onset comes from the HPOA `onset` column and, in `hpoa-recount-v1`, from the phenopacket onsets aggregated into recounted rows; merged profiles keep each term's earliest onset. Coverage is thin: in HPO 2026-02-16, 3,052 of 264,245 positive phenotype rows (1.2%) carry an onset. The build summary reports it for every build (`rows.phenotype_rows_used_with_onset`, `rows.recounted_with_onset`); terms without onset are not gated.
+
+### Running it
+
+```bash
+rare-disease-simulator build-profiles --from-hpoa \
+  --hpoa ../diagnostic.ar-training/<hpoa-recount-v1 file> \
+  --gene-profiles ../diagnostic.ar-training/<genes-v2 genes.json.gz> \
+  --output outputs/profiles-v04.jsonl
+rare-disease-simulator simulate --profiles outputs/profiles-v04.jsonl --genes all \
+  --gene-profiles ../diagnostic.ar-training/<genes-v2 genes.json.gz> \
+  --report-model ../diagnostic.ar-training/<report-model-v1.json> \
+  --cardinal ../diagnostic.ar-training/<cardinal-v1.tsv> \
+  --calibration calib.json --cases-per-gene 10 --difficulty medium \
+  --output outputs/rich_cases.jsonl
+```
+
+where `calib.json` sets at least `frequency.shrinkage_mean`. `validate` and `export-training` take the report model and cardinal file from the run summary; `validate --report-model/--cardinal` override them.
 
 ## Calibration files
 
@@ -712,7 +822,7 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | --- | --- |
 | `case_id` | the rich case id |
 | `gene`, `gene_index` | the GNN symbol and class index |
-| `entity`, `profile_id` | the disease entity and the profile drawn (entity is null for disease-first cases) |
+| `entity`, `profile_id` | the disease entity and the profile drawn (entity is null for disease-first cases; with merged entity profiles, simulator 0.4's default, `profile_id` is the entity as well) |
 | `present` | sorted, unique HPO ids the record shows: recorded positives (as recorded, generalized or not) and noise |
 | `true_present` | sorted, unique HPO ids the patient has: `present`, the specific terms generalized positives came from, and the `missing` and `unknown` terms. It is ground truth for answering simulated questions (yes when the asked term equals or is an ancestor of a true term), **not a model input** |
 | `excluded` | sorted, unique asked-and-absent HPO ids |
@@ -761,10 +871,11 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 - noise per case and cases with a forced positive;
 - sex counts, and the male share per sex prior key against `sex.p_male`;
 - age and onset histograms, and the onset-category mix against the profiles' onset distributions;
-- **calibration**: per (disease, profile term), the share of the disease's cases where the term is truly present (recorded, generalized from, missing or unknown) against its estimate, in bins [0, 0.05), [0.05, 0.30), [0.30, 0.80), [0.80, 0.99), [0.99, 1]. The error is the case-weighted mean of |observed − expected| per bin. The `ungated_terms` view drops terms that sex, onset or progression act on, so it isolates the frequency model; `all_terms` shows the gating effect;
-- **invariant violations**, with examples: no observed positive, duplicate or over-cap negatives, a negative related to a present term, a confounder negative annotated to the true disease, a gene-other-disease negative that is a term of the case's profile, a sex-restricted term for the other sex, age below onset, noise outside the vocabulary, a disease missing from the profiles.
+- **reporting** (report-model cases, simulator 0.4): the drawn budgets and the reported counts per case against the report model's histogram (shares and total variation), their means, and how many true cardinal terms were reported;
+- **calibration**: per (disease, profile term), the share of the disease's cases where the term is truly present (recorded, generalized from, missing or unknown) against the frequency it was simulated with (the run's count estimator), in bins [0, 0.05), [0.05, 0.30), [0.30, 0.80), [0.80, 0.99), [0.99, 1]. The error is the case-weighted mean of |observed − expected| per bin. The `ungated_terms` view drops terms that sex, onset or progression act on, so it isolates the frequency model; `all_terms` shows the gating effect;
+- **invariant violations**, with examples: no observed positive, duplicate or over-cap negatives, a negative related to a present term, a confounder negative annotated to the true disease, a gene-other-disease negative that is a term of the case's profile, a sex-restricted term for the other sex, age below onset, noise outside the vocabulary, a disease missing from the profiles; for report-model cases also a budget outside the histogram (`budget_outside_histogram`), a reported count other than `min(true terms, max(budget, true cardinal terms))` (`reported_count_mismatch`), and a true cardinal term left unreported with a budget of at least 1 (`cardinal_not_reported`). Without a cardinal file only `reported_below_budget` is checked.
 
-The sex check per prior uses the prior recorded in each case (`metadata.sex_prior_key`), so gene-first cases are compared with their entity's prior. The noise vocabulary defaults to the one in the run summary. `validate --dataset` checks an export-v2 file instead (see [Export v2](#export-v2-training-format)).
+Merged gene-first cases (`target.profile_ids`) are checked against the profile merged from those ids, so the sex, confounder and calibration checks see what the simulator used. The report model and cardinal file default to the run summary's (`--report-model`, `--cardinal` override them). The sex check per prior uses the prior recorded in each case (`metadata.sex_prior_key`), so gene-first cases are compared with their entity's prior. The noise vocabulary defaults to the one in the run summary. `validate --dataset` checks an export-v2 file instead (see [Export v2](#export-v2-training-format)).
 
 Any violation makes the command exit with status 1. Without `--cases`, `validate` only checks the config, as before. Comparing the same statistics with R1-train is the training repo's job.
 
