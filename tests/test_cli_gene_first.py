@@ -219,7 +219,7 @@ def test_export_validate_end_to_end_and_byte_identical(gene_run, tmp_path: Path)
     assert card["counts"]["cases"] == 36
     assert card["counts"]["per_gene_cases"] == {"GENEA": 12, "GENEB": 12, "OLDC": 12}
     assert card["split"]["fractions"] == {"train": 0.9, "val": 0.05, "test": 0.05}
-    assert card["dataset_id"] == "ds-sim0.4.0-hpo2026-02-16-n4-s42"
+    assert card["dataset_id"] == "ds-sim0.4.1-hpo2026-02-16-n4-s42"
     assert card["validate"]["violations"]["count"] == 0
     assert card["genes"]["skipped"]["no_gene_record"] == 1
     assert {"gene_profiles", "gnn_genes", "profiles", "profile_sources"} <= set(card["inputs"])

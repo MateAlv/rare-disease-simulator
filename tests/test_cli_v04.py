@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.4.0"
+    assert summary["simulate"]["simulator_version"] == "0.4.1"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.4.0-")
+    assert card["dataset_id"].startswith("ds-sim0.4.1-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"

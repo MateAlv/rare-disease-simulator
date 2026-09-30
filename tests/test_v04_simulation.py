@@ -372,3 +372,72 @@ def test_pre_04_run_summaries_keep_03_semantics() -> None:
     assert legacy.frequency.count_estimator == "jeffreys"
     assert current.reporting.mode == "report_model"
     assert current == _config()
+
+
+def test_a_term_shown_through_a_generalized_child_leaves_no_budget_gap(ontology) -> None:
+    ids = ["HP:0007359", "HP:0001250", "HP:0001251", "HP:0001249", "HP:0000505",
+           "HP:0000518", "HP:0001629", "HP:0002650", "HP:0000988"]
+    rich = _profile("OMIM:7", [_phenotype(hpo_id, 1.0) for hpo_id in ids])
+    config = _config(
+        difficulties=["easy"], cases_per_disease_per_difficulty=3000,
+        presets={"easy": {**_config().presets["easy"].model_dump(),
+                          "ontology_smoothing_rate": 0.5, "noise_mean": 0.0}},
+    )
+
+    cases = simulate_cases(rich, config, ontology=ontology, reporting=_reporting(ontology))
+
+    collided = [
+        case for case in cases
+        if any(p.source_hpo_id == "HP:0007359" and p.hpo_id == "HP:0001250"
+               for p in case.positive_phenotypes)
+        and case.metadata.report_budget_profile > 1
+    ]
+    assert collided
+    for case in cases:
+        assert _reported(case) == min(len(ids), case.metadata.report_budget_profile)
+    report = validate_cases(
+        cases, profiles={rich.disease_id: rich}, ontology=ontology, config=config,
+        report_model=load_report_model(V04 / "report_model.json"), cardinal=CARDINAL,
+    )
+    assert report["violations"]["count"] == 0, report["violations"]
+
+
+def test_budget_share_noise_keeps_every_record_at_its_budget(ontology) -> None:
+    ids = ["HP:0001250", "HP:0001251", "HP:0001249", "HP:0000505", "HP:0000518",
+           "HP:0001629", "HP:0002650", "HP:0000988"]
+    rich = _profile("OMIM:7", [_phenotype(hpo_id, 1.0) for hpo_id in ids])
+    vocabulary = [
+        NoiseTerm(hpo_id, TERMS[hpo_id][0])
+        for hpo_id in ("HP:0000964", "HP:0001385", "HP:0007359", "HP:0000008", "HP:0000028",
+                       "HP:0000047")
+    ]
+    config = _config(
+        difficulties=["easy"], cases_per_disease_per_difficulty=4000,
+        reporting={"mode": "report_model", "noise_count": "budget_share", "noise_share": 0.5},
+        missingness={"sex_unknown": 0.0, "age_unknown": 0.0, "onset_unknown": 0.0,
+                     "no_negatives": 1.0},
+        presets={"easy": {**_config().presets["easy"].model_dump(),
+                          "ontology_smoothing_rate": 0.0, "negatives_mean": 0.0}},
+    )
+    reporting = _reporting(ontology, cardinal=None)
+
+    cases = simulate_cases(
+        rich, config, ontology=ontology, reporting=reporting, noise_vocabulary=vocabulary
+    )
+
+    noise_slots = budget_slots = 0
+    for case in cases:
+        k, noise = case.metadata.report_budget, len(case.noise_phenotypes)
+        assert noise <= k - 1
+        assert len(case.positive_phenotypes) + noise == k
+        if k > 1:
+            noise_slots += noise
+            budget_slots += k
+    assert noise_slots / budget_slots == pytest.approx(0.5 * 0.9, abs=0.1)
+    report = validate_cases(
+        cases, profiles={"OMIM:7": rich}, ontology=ontology, config=config,
+        noise_vocabulary={term.hpo_id for term in vocabulary},
+        report_model=reporting.model,
+    )
+    assert report["violations"]["count"] == 0, report["violations"]
+    assert report["reporting"]["total_variation_reported_total_vs_expected"] < 0.02
