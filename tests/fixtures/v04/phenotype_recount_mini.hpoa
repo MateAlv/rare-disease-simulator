@@ -1,0 +1,41 @@
+#description: "hpoa-recount fixture (synthetic): held-out rows recounted from a fake R1-train"
+#version: 2026-02-16
+#hpo-version: http://purl.obolibrary.org/obo/hp/releases/2026-02-16/hp.json
+database_id	disease_name	qualifier	hpo_id	reference	evidence	onset	frequency	sex	modifier	aspect	biocuration
+OMIM:100001	Alpha syndrome		HP:0001250	PMID:1	PCS		HP:0040282			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0001251	PMID:2	PCS		1/4			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0001251	PMID:3	PCS		3/4			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000999	OMIM:100001	IEA					P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0001249	PMID:1	PCS					P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000504	PMID:3	PCS	HP:0003593	20%			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000489	PMID:1	PCS		1/2			P	HPO:fixture
+OMIM:100001	Alpha syndrome	NOT	HP:0001627	PMID:4	PCS					P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000047	PMID:4	PCS		HP:0040285			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000140	PMID:5	PCS		0/5			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000478	R1-TRAIN:r1-v1	PCS	HP:0011463	7/9			P	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0000007	OMIM:100001	IEA					I	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0003593	OMIM:100001	IEA					C	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0011463	OMIM:100001	IEA					C	HPO:fixture
+OMIM:100001	Alpha syndrome		HP:0003676	OMIM:100001	IEA					C	HPO:fixture
+OMIM:100002	Beta X-linked syndrome		HP:0000047	PMID:10	PCS	HP:0003577	2/3	MALE		P	HPO:fixture
+OMIM:100002	Beta X-linked syndrome		HP:0000140	PMID:10	PCS	HP:0003581	1/2	FEMALE		P	HPO:fixture
+OMIM:100002	Beta X-linked syndrome		HP:0001250	PMID:10	PCS	HP:0003581	1/2	MALE		P	HPO:fixture
+OMIM:100002	Beta X-linked syndrome		HP:0001250	PMID:11	PCS	HP:0003593	1/2			P	HPO:fixture
+OMIM:100002	Beta X-linked syndrome		HP:0001419	OMIM:100002	IEA					I	HPO:fixture
+ORPHA:3001	Gamma disease		HP:0001251	ORPHA:3001	TAS		HP:0040283			P	HPO:fixture
+ORPHA:3001	Gamma disease		HP:0001251	ORPHA:3001	TAS		HP:0040281			P	HPO:fixture
+ORPHA:3001	Gamma disease		HP:0001627	ORPHA:3001	TAS		HP:0040280			P	HPO:fixture
+ORPHA:3001	Gamma disease		HP:0001423	ORPHA:3001	TAS					I	HPO:fixture
+OMIM:100004	Delta masked syndrome		HP:0001250	R1-TRAIN:r1-v1	PCS	HP:0003593	4/10			P	HPO:fixture
+OMIM:100004	Delta masked syndrome		HP:0000006	OMIM:100004	IEA					I	HPO:fixture
+OMIM:100005	Epsilon negatives only	NOT	HP:0001250	PMID:20	PCS					P	HPO:fixture
+OMIM:100006	Disease without gene		HP:0001250	PMID:21	PCS		HP:0040282			P	HPO:fixture
+DECIPHER:1	Zeta microdeletion		HP:0001249	DECIPHER:1	IEA					P	HPO:fixture
+OMIM:100007	Eta syndrome		HP:0001249	PMID:22	PCS					P	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0001250	PMID:23	PCS		HP:0040284			P	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0001249	PMID:23	PCS		1/3			P	HPO:fixture
+OMIM:100008	Theta male-limited disease	NOT	HP:0001249	PMID:24	PCS					P	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0000006	OMIM:100008	IEA					I	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0001475	OMIM:100008	IEA					I	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0001250	PMID:23	PCS					H	HPO:fixture
+OMIM:100008	Theta male-limited disease		HP:0001251	PMID:23	PCS					M	HPO:fixture

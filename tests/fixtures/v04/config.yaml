@@ -1,0 +1,15 @@
+# Simulator v0.4 test configuration: fixture sources, a recount-style HPOA file
+# and synthetic reporting artifacts. frequency.shrinkage_mean comes from a
+# calibration file in the tests, as the training repo will supply it.
+mvp:
+  diseases: []
+
+sources:
+  hpo_json_path: tests/fixtures/hpoa/hp_mini.json
+  phenotype_annotation_path: tests/fixtures/v04/phenotype_recount_mini.hpoa
+  genes_to_disease_path: tests/fixtures/hpoa/genes_to_disease_mini.txt
+  orphanet_ages_path: null
+  omim_orpha_map_path: null
+  exclude_pmids_path: null
+  report_model_path: tests/fixtures/v04/report_model.json
+  cardinal_path: tests/fixtures/v04/cardinal.tsv

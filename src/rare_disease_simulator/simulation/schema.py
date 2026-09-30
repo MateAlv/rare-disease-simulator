@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -30,6 +30,9 @@ SexPriorKey = Literal[
 NegativeSource = Literal["own_disease", "own_gene_other_disease", "confounder", "not_annotation"]
 OwnDiseasePool = Literal["profile", "entity"]
 UnfilledSlots = Literal["drop", "redistribute"]
+CountEstimator = Literal["beta_shrinkage", "jeffreys"]
+EntityProfiles = Literal["merged", "uniform"]
+EmissionMode = Literal["report_model", "observation"]
 
 
 class StrictBaseModel(BaseModel):
@@ -56,7 +59,12 @@ class CaseTarget(StrictBaseModel):
     entity_id: str | None = Field(
         default=None,
         description="Gene-first mode: the disease entity drawn for the gene; "
-        "disease_id is the profile drawn within it.",
+        "disease_id is the profile drawn within it (uniform) or the entity (merged).",
+    )
+    profile_ids: list[str] | None = Field(
+        default=None,
+        description="Merged gene-first mode: the entity's profile ids the case was "
+        "simulated from, merged into one profile.",
     )
 
 
@@ -102,6 +110,18 @@ class GeneratorMetadata(StrictBaseModel):
     )
     sex_prior_key: SexPriorKey | None = Field(
         default=None, description="Sex prior the case was drawn from (sex.p_male key)."
+    )
+    report_budget: int | None = Field(
+        default=None,
+        ge=0,
+        description="Report-model emission: the term budget k drawn for the case, which "
+        "counts profile terms and noise together.",
+    )
+    report_budget_profile: int | None = Field(
+        default=None,
+        ge=1,
+        description="Report-model emission: the budget left for profile terms, "
+        "max(1, k - noise terms drawn).",
     )
     difficulty: Difficulty
     generated_at: datetime | None = Field(
@@ -149,6 +169,24 @@ class FrequencySettings(StrictBaseModel):
         ge=0.0,
         le=1.0,
         description="Mean used for terms whose frequency is unknown (ADR-0007: never 'always').",
+    )
+    count_estimator: CountEstimator = Field(
+        default="beta_shrinkage",
+        description="Point estimate of a count-based frequency n/m: 'beta_shrinkage' "
+        "(ADR-0011: (n + s*mean) / (m + s)) or 'jeffreys' ((n + 0.5) / (m + 1), simulator 0.3).",
+    )
+    shrinkage_mean: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Prior mean of the Beta shrinkage: the median count-based frequency of "
+        "hpoa-recount-v1, supplied by diagnostic.ar-training. Required when count-based "
+        "terms are simulated with 'beta_shrinkage'.",
+    )
+    shrinkage_strength: float = Field(
+        default=2.0,
+        gt=0.0,
+        description="Prior strength of the Beta shrinkage, in pseudo-patients (ADR-0011: 2).",
     )
 
 
@@ -295,6 +333,22 @@ class NegativeSettings(StrictBaseModel):
         return merged
 
 
+class ReportingSettings(StrictBaseModel):
+    """Which true terms a record shows (ADR-0011 "truth, then reporting")."""
+
+    mode: EmissionMode = Field(
+        default="report_model",
+        description="'report_model': a term budget and a reporting model pick the reported "
+        "terms from the true ones (needs a report-model file); 'observation': each true term "
+        "is recorded with the preset's observation rate (simulator 0.3).",
+    )
+    force_cardinal: bool = Field(
+        default=True,
+        description="Report every true cardinal term (cardinal-v1) first, when the budget "
+        "is at least 1.",
+    )
+
+
 class MissingnessSettings(StrictBaseModel):
     """Share of cases whose covariates or negatives are withheld."""
 
@@ -320,6 +374,13 @@ class SimulationConfig(StrictBaseModel):
     progression: ProgressionSettings = Field(default_factory=ProgressionSettings)
     negatives: NegativeSettings = Field(default_factory=NegativeSettings)
     missingness: MissingnessSettings = Field(default_factory=MissingnessSettings)
+    entity_profiles: EntityProfiles = Field(
+        default="merged",
+        description="Gene-first mode: 'merged' simulates an entity from one profile merged "
+        "from all its profile ids (ADR-0011); 'uniform' draws one of them per case "
+        "(simulator 0.3).",
+    )
+    reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     max_redraws: int = Field(
         default=20,
         ge=0,
@@ -332,3 +393,21 @@ class SimulationConfig(StrictBaseModel):
         cls, value: dict[Difficulty, DifficultyPreset]
     ) -> dict[Difficulty, DifficultyPreset]:
         return {**DIFFICULTY_PRESETS, **value}
+
+
+def run_config(data: dict[str, Any]) -> SimulationConfig:
+    """The config a run summary records, reading a pre-0.4 summary with 0.3 semantics.
+
+    A summary written before simulator 0.4 has no ``entity_profiles``,
+    ``reporting`` or ``frequency.count_estimator``; its cases were made with
+    uniform profile draws, observation emission and Jeffreys counts, so those
+    are filled in instead of the 0.4 defaults.
+    """
+
+    config = dict(data)
+    config.setdefault("entity_profiles", "uniform")
+    config.setdefault("reporting", {"mode": "observation"})
+    frequency = dict(config.get("frequency") or {})
+    frequency.setdefault("count_estimator", "jeffreys")
+    config["frequency"] = frequency
+    return SimulationConfig.model_validate(config)

@@ -77,12 +77,14 @@ class ConfounderIndex:
             for hpo_id in vector:
                 postings[hpo_id].append(disease_id)
         self._postings = dict(postings)
+        self._min_information_content = min_information_content
         self._norms = {
             disease_id: math.sqrt(sum(weight * weight for weight in vector.values()))
             for disease_id, vector in self._vectors.items()
         }
         self._confounder_cache: dict[str, list[tuple[str, float]]] = {}
         self._term_cache: dict[str, list[ConfounderTerm]] = {}
+        self._merged_cache: dict[tuple[str, frozenset[str]], list[ConfounderTerm]] = {}
 
     def confounders(self, disease_id: str) -> list[tuple[str, float]]:
         """The ``top_n`` most similar other diseases, as ``(disease_id, cosine)``."""
@@ -90,14 +92,20 @@ class ConfounderIndex:
         cached = self._confounder_cache.get(disease_id)
         if cached is not None:
             return cached
-        vector = self._vectors.get(disease_id, {})
-        norm = self._norms.get(disease_id, 0.0)
+        ranked = self._rank(self._vectors.get(disease_id, {}), frozenset({disease_id}))
+        self._confounder_cache[disease_id] = ranked
+        return ranked
+
+    def _rank(
+        self, vector: dict[str, float], exclude: frozenset[str]
+    ) -> list[tuple[str, float]]:
+        norm = math.sqrt(sum(weight * weight for weight in vector.values()))
         scores: dict[str, float] = defaultdict(float)
         for hpo_id, weight in vector.items():
             for other_id in self._postings.get(hpo_id, ()):
-                if other_id != disease_id:
-                    scores[other_id] += weight * weight
-        ranked = sorted(
+                if other_id not in exclude:
+                    scores[other_id] += weight * self._vectors[other_id][hpo_id]
+        return sorted(
             (
                 (other_id, score / (norm * self._norms[other_id]))
                 for other_id, score in scores.items()
@@ -105,8 +113,6 @@ class ConfounderIndex:
             ),
             key=lambda item: (-item[1], item[0]),
         )[: self._top_n]
-        self._confounder_cache[disease_id] = ranked
-        return ranked
 
     def candidate_terms(self, disease_id: str) -> list[ConfounderTerm]:
         """Confounder terms never annotated to the disease, weighted by similarity x frequency.
@@ -121,12 +127,42 @@ class ConfounderIndex:
         profile = self._profiles.get(disease_id)
         if profile is None:
             return []
+        terms = self._terms(profile, self.confounders(disease_id))
+        self._term_cache[disease_id] = terms
+        return terms
+
+    def candidate_terms_for_profile(
+        self, profile: DiseaseProfile, exclude: frozenset[str]
+    ) -> list[ConfounderTerm]:
+        """Confounder terms of a profile outside the index (e.g. a merged entity).
+
+        Its similarity uses the index's information content, and the diseases
+        in ``exclude`` (the entity's own profiles) are never confounders.
+        """
+
+        key = (profile.disease_id, exclude)
+        cached = self._merged_cache.get(key)
+        if cached is not None:
+            return cached
+        vector = {
+            hpo_id: self.information_content[hpo_id]
+            for hpo_id in sorted(self._expanded_terms(profile))
+            if self.information_content.get(hpo_id, 0.0) >= self._min_information_content
+            and hpo_id in self.information_content
+        }
+        terms = self._terms(profile, self._rank(vector, exclude))
+        self._merged_cache[key] = terms
+        return terms
+
+    def _terms(
+        self, profile: DiseaseProfile, confounders: list[tuple[str, float]]
+    ) -> list[ConfounderTerm]:
         blocked = self.annotation_closure(profile)
         weights: dict[str, float] = defaultdict(float)
         best: dict[str, tuple[float, str]] = {}
         labels: dict[str, str] = {}
         restrictions: dict[str, set[SexRestriction | None]] = defaultdict(set)
-        for other_id, similarity in self.confounders(disease_id):
+        for other_id, similarity in confounders:
             for phenotype in self._profiles[other_id].phenotypes:
                 hpo_id = phenotype.hpo_id
                 if hpo_id in blocked:
@@ -159,7 +195,6 @@ class ConfounderIndex:
             for hpo_id in sorted(weights)
             if weights[hpo_id] > 0.0
         ]
-        self._term_cache[disease_id] = terms
         return terms
 
     def annotation_closure(self, profile: DiseaseProfile) -> frozenset[str]:
