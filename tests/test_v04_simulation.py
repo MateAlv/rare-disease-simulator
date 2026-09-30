@@ -20,6 +20,7 @@ from rare_disease_simulator.simulation.simulator import (
     simulate_gene_cases,
     simulation_frequency,
 )
+from rare_disease_simulator.validation.cases import validate_cases
 from tests.fixtures.readers import fixture_path
 from tests.test_gene_first import ALL_PROFILES, PROFILE_MAP, TARGET
 from tests.test_simulation_v02 import (
@@ -229,3 +230,59 @@ def test_single_entity_target_matches_disease_first_truth(ontology) -> None:
 
     assert {case.target.profile_ids[0] for case in cases} == {"OMIM:1"}
     assert all(case.metadata.report_budget is not None for case in cases)
+
+
+def _validate(ontology, cases):
+    return validate_cases(
+        cases,
+        profiles=PROFILE_MAP,
+        ontology=ontology,
+        config=_config(cases_per_disease_per_difficulty=120),
+        report_model=load_report_model(V04 / "report_model.json"),
+        cardinal=CARDINAL,
+    )
+
+
+def test_validate_accepts_v04_cases_and_reports_the_reporting_rule(ontology) -> None:
+    cases = _gene_cases(ontology, _config(cases_per_disease_per_difficulty=120))
+
+    report = _validate(ontology, cases)
+
+    assert report["violations"]["count"] == 0, report["violations"]
+    reporting = report["reporting"]
+    assert reporting["cases"] == len(cases)
+    assert reporting["budget_expected"] == {"1": 0.2, "2": 0.4, "3": 0.3, "4": 0.1}
+    assert reporting["total_variation_drawn_vs_expected"] < 0.05
+    assert reporting["cardinal"]["reported_terms"] == reporting["cardinal"]["true_terms"] > 0
+    assert report["diseases"] == 2
+    assert report["calibration"]["all_terms"]["pairs"] > 0
+
+
+def test_validate_flags_broken_reporting(ontology) -> None:
+    cases = _gene_cases(ontology, _config(cases_per_disease_per_difficulty=120))
+    case = next(
+        c for c in cases
+        if any(p.reason == CARDINAL_REASON for p in c.positive_phenotypes)
+        and len(c.positive_phenotypes) > 1
+    )
+    cardinal = next(p for p in case.positive_phenotypes if p.reason == CARDINAL_REASON)
+    hidden = case.model_copy(
+        update={
+            "positive_phenotypes": [p for p in case.positive_phenotypes if p is not cardinal],
+            "missing_phenotypes": [
+                *case.missing_phenotypes,
+                cardinal.model_copy(update={"status": "missing", "reason": "not_reported"}),
+            ],
+        }
+    )
+    outside = case.model_copy(
+        update={"metadata": case.metadata.model_copy(update={"report_budget": 9})}
+    )
+
+    report = _validate(ontology, [hidden, outside])
+
+    assert set(report["violations"]["by_type"]) >= {
+        "cardinal_not_reported",
+        "reported_count_mismatch",
+        "budget_outside_histogram",
+    }

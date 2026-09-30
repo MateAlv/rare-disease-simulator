@@ -13,6 +13,14 @@ with its frequency estimate. The ``ungated`` view keeps only terms that no
 mechanism other than frequency acts on (no sex restriction or sex-specific
 anchor, no onset gating, not in a progressive disease), so it should match
 the estimate up to sampling noise and the at-least-one-positive redraw.
+
+Merged gene-first cases (``target.profile_ids``) are checked against the
+profile merged from those ids, as the simulator built it. Report-model cases
+(``metadata.report_budget``) are also checked for the reporting rule: the
+reported count is ``min(true terms, max(budget, true cardinal terms))``, every
+true cardinal term is reported when the budget is at least 1, and the budget
+lies in the report model's histogram; the report compares the drawn budgets
+and the reported counts with that histogram.
 """
 
 from __future__ import annotations
@@ -24,14 +32,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rare_disease_simulator.data_sources.hpo import HpoOntology
+from rare_disease_simulator.profiles.merge import merge_entity_profiles
 from rare_disease_simulator.profiles.schema import DiseaseProfile
+from rare_disease_simulator.simulation.reporting import BudgetSampler, CardinalIndex, ReportModel
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase
 from rare_disease_simulator.simulation.simulator import (
     CONGENITAL_ONSET,
     FORCED_REASON,
+    MERGED_REASON,
     SexSpecificTerms,
     config_hash,
     sex_prior_key,
+    simulation_frequency,
 )
 
 BUCKETS = (
@@ -81,6 +93,10 @@ class _Accumulator:
     onset_categories: Counter[str] = field(default_factory=Counter)
     expected_onset: Counter[str] = field(default_factory=Counter)
     present_counts: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
+    case_profiles: dict[str, DiseaseProfile] = field(default_factory=dict)
+    budgets: Counter[int] = field(default_factory=Counter)
+    reported: Counter[int] = field(default_factory=Counter)
+    cardinal: Counter[str] = field(default_factory=Counter)
     violations: Counter[str] = field(default_factory=Counter)
     examples: list[dict[str, str]] = field(default_factory=list)
 
@@ -97,18 +113,27 @@ def validate_cases(
     ontology: HpoOntology | None = None,
     config: SimulationConfig | None = None,
     noise_vocabulary: set[str] | None = None,
+    report_model: ReportModel | None = None,
+    cardinal: CardinalIndex | None = None,
 ) -> dict[str, Any]:
     """Build the validation report; ``report["violations"]["count"]`` > 0 means failure."""
 
     acc = _Accumulator()
     sex_terms = SexSpecificTerms(ontology, config.sex) if config is not None else None
     closures: dict[str, frozenset[str]] = {}
+    merged: dict[tuple[str, ...], DiseaseProfile | None] = {}
+    budget = BudgetSampler(report_model.term_budget.histogram) if report_model else None
+    force_cardinal = config.reporting.force_cardinal if config is not None else True
     for case in cases:
-        profile = profiles.get(case.target.disease_id) if profiles is not None else None
+        profile = _case_profile(case, profiles, ontology, merged)
         if profiles is not None and profile is None:
-            acc.violation("unknown_disease", case.case_id, case.target.disease_id)
+            acc.violation("unknown_disease", case.case_id, _profile_key(case))
+        if profile is not None:
+            acc.case_profiles.setdefault(_profile_key(case), profile)
         _count_case(acc, case, profile, config)
         _check_case(acc, case, profile, ontology, config, sex_terms, noise_vocabulary, closures)
+        if case.metadata.report_budget is not None:
+            _check_reporting(acc, case, budget, cardinal, force_cardinal)
 
     return {
         "cases": acc.cases,
@@ -142,8 +167,9 @@ def validate_cases(
             **_age_report(acc.onsets, acc.cases),
             "by_category": _category_report(acc.onset_categories, acc.expected_onset),
         },
+        "reporting": _reporting_report(acc, budget, cardinal),
         "calibration": (
-            _calibration(acc, profiles, ontology, config) if profiles is not None else None
+            _calibration(acc, ontology, config) if profiles is not None else None
         ),
         "violations": {
             "count": sum(acc.violations.values()),
@@ -153,6 +179,128 @@ def validate_cases(
     }
 
 
+def _profile_key(case: SyntheticCase) -> str:
+    if case.target.profile_ids:
+        return "+".join(case.target.profile_ids)
+    return case.target.disease_id
+
+
+def _case_profile(
+    case: SyntheticCase,
+    profiles: Mapping[str, DiseaseProfile] | None,
+    ontology: HpoOntology | None,
+    merged: dict[tuple[str, ...], DiseaseProfile | None],
+) -> DiseaseProfile | None:
+    if profiles is None:
+        return None
+    ids = case.target.profile_ids
+    if not ids:
+        return profiles.get(case.target.disease_id)
+    key = tuple(ids)
+    if key not in merged:
+        members = [profiles.get(profile_id) for profile_id in ids]
+        merged[key] = (
+            merge_entity_profiles(
+                case.target.entity_id or case.target.disease_id,
+                [member for member in members if member is not None],
+                ontology,
+            )[0]
+            if all(member is not None for member in members)
+            else None
+        )
+    return merged[key]
+
+
+def _check_reporting(
+    acc: _Accumulator,
+    case: SyntheticCase,
+    budget: BudgetSampler | None,
+    cardinal: CardinalIndex | None,
+    force_cardinal: bool,
+) -> None:
+    """The reporting rule of report-model cases (see the module docstring)."""
+
+    k = case.metadata.report_budget
+    assert k is not None
+    acc.budgets[k] += 1
+    if budget is not None and k not in budget.probabilities:
+        acc.violation("budget_outside_histogram", case.case_id, str(k))
+    profile_positives = [p for p in case.positive_phenotypes if p.simulated_origin != "noise"]
+    reported_ids = {p.source_hpo_id or p.hpo_id for p in profile_positives}
+    reported_ids |= {p.hpo_id for p in case.missing_phenotypes if p.reason == MERGED_REASON}
+    unreported = {p.hpo_id for p in case.missing_phenotypes if p.reason != MERGED_REASON}
+    unreported |= {p.hpo_id for p in case.unknown_phenotypes}
+    reported = len(profile_positives) + sum(
+        1 for p in case.missing_phenotypes if p.reason == MERGED_REASON
+    )
+    acc.reported[reported] += 1
+    true_count = reported + len(unreported - reported_ids)
+    if cardinal is None:
+        if reported < min(k, true_count):
+            acc.violation("reported_below_budget", case.case_id, f"{reported}<{k}")
+        return
+    ids = case.target.profile_ids or [case.target.disease_id]
+    true_cardinal = (reported_ids | unreported) & cardinal.terms_for(ids)
+    acc.cardinal["cases"] += 1
+    acc.cardinal["true_terms"] += len(true_cardinal)
+    acc.cardinal["reported_terms"] += len(true_cardinal & reported_ids)
+    if true_cardinal:
+        acc.cardinal["cases_with_true_cardinal"] += 1
+    forced = len(true_cardinal) if force_cardinal and k > 0 else 0
+    expected = min(true_count, max(k, forced))
+    if reported != expected:
+        acc.violation("reported_count_mismatch", case.case_id, f"{reported}!={expected}")
+    if forced:
+        missed = sorted(true_cardinal & (unreported - reported_ids))
+        if missed:
+            acc.violation("cardinal_not_reported", case.case_id, ",".join(missed))
+
+
+def _reporting_report(
+    acc: _Accumulator, budget: BudgetSampler | None, cardinal: CardinalIndex | None
+) -> dict[str, Any] | None:
+    cases = sum(acc.budgets.values())
+    if not cases:
+        return None
+    drawn = {k: count / cases for k, count in acc.budgets.items()}
+    reported = {k: count / cases for k, count in acc.reported.items()}
+    expected = budget.probabilities if budget is not None else None
+    return {
+        "cases": cases,
+        "budget_expected": _share_table(expected) if expected is not None else None,
+        "budget_drawn": _share_table(drawn),
+        "reported_per_case": _share_table(reported),
+        "reported_mean": round(sum(k * c for k, c in acc.reported.items()) / cases, 3),
+        "budget_mean": round(sum(k * c for k, c in acc.budgets.items()) / cases, 3),
+        "total_variation_drawn_vs_expected": (
+            _total_variation(drawn, expected) if expected is not None else None
+        ),
+        "total_variation_reported_vs_expected": (
+            _total_variation(reported, expected) if expected is not None else None
+        ),
+        "cardinal": (
+            {
+                "cases_with_true_cardinal": acc.cardinal["cases_with_true_cardinal"],
+                "true_terms": acc.cardinal["true_terms"],
+                "reported_terms": acc.cardinal["reported_terms"],
+                "reported_share": _share(
+                    acc.cardinal["reported_terms"], acc.cardinal["true_terms"]
+                ),
+            }
+            if cardinal is not None
+            else None
+        ),
+    }
+
+
+def _share_table(shares: Mapping[int, float]) -> dict[str, float]:
+    return {str(k): round(shares[k], 4) for k in sorted(shares)}
+
+
+def _total_variation(a: Mapping[int, float], b: Mapping[int, float]) -> float:
+    return round(0.5 * sum(abs(a.get(k, 0.0) - b.get(k, 0.0)) for k in set(a) | set(b)), 4)
+
+
 def _count_case(
     acc: _Accumulator,
     case: SyntheticCase,
@@ -160,7 +308,7 @@ def _count_case(
     config: SimulationConfig | None,
 ) -> None:
     acc.cases += 1
-    acc.diseases[case.target.disease_id] += 1
+    acc.diseases[_profile_key(case)] += 1
     acc.genes[case.target.gene] += 1
     acc.difficulties[case.metadata.difficulty] += 1
     acc.config_hashes[case.metadata.config_hash] += 1
@@ -192,7 +340,7 @@ def _count_case(
                 acc.expected_onset[category] += weight
 
     for hpo_id in _truly_present(case):
-        acc.present_counts[case.target.disease_id][hpo_id] += 1
+        acc.present_counts[_profile_key(case)][hpo_id] += 1
 
 
 def _check_case(
@@ -307,7 +455,6 @@ def _normalize(weights: Mapping[str, float]) -> dict[str, float]:
 
 def _calibration(
     acc: _Accumulator,
-    profiles: Mapping[str, DiseaseProfile],
     ontology: HpoOntology | None,
     config: SimulationConfig | None,
 ) -> dict[str, Any]:
@@ -317,16 +464,17 @@ def _calibration(
     all_pairs: list[tuple[float, float, int]] = []
     ungated: list[tuple[float, float, int]] = []
     for disease_id, cases in acc.diseases.items():
-        profile = profiles.get(disease_id)
+        profile = acc.case_profiles.get(disease_id)
         if profile is None:
             continue
         present = acc.present_counts[disease_id]
         for phenotype in profile.phenotypes:
-            expected = (
-                phenotype.frequency_estimate
-                if phenotype.frequency_estimate is not None
-                else unknown
+            frequency = (
+                simulation_frequency(phenotype, config.frequency)
+                if config is not None
+                else phenotype.frequency_estimate
             )
+            expected = frequency if frequency is not None else unknown
             pair = (expected, present[phenotype.hpo_id] / cases, cases)
             all_pairs.append(pair)
             gated = (
@@ -548,6 +696,20 @@ def format_report(report: Mapping[str, Any]) -> str:
                     f"expected {row['mean_expected']}, observed {row['mean_observed']} "
                     f"(n={row['pairs']})"
                 )
+    reporting = report.get("reporting")
+    if reporting is not None:
+        lines.append(
+            f"Reporting ({reporting['cases']} report-model cases): budget mean "
+            f"{reporting['budget_mean']}, reported mean {reporting['reported_mean']}; "
+            f"TV drawn vs histogram {reporting['total_variation_drawn_vs_expected']}, "
+            f"reported vs histogram {reporting['total_variation_reported_vs_expected']}"
+        )
+        cardinal = reporting["cardinal"]
+        if cardinal is not None:
+            lines.append(
+                f"  cardinal: {cardinal['reported_terms']} of {cardinal['true_terms']} true "
+                f"cardinal terms reported, in {cardinal['cases_with_true_cardinal']} case(s)"
+            )
     violations = report["violations"]
     lines.append(f"Invariant violations: {violations['count']}")
     for kind, count in violations["by_type"].items():
