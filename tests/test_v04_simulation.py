@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from rare_disease_simulator.data_sources.gene_profiles import EntityOption, GeneTarget
+from rare_disease_simulator.data_sources.gene_profiles import (
+    EntityOption,
+    GeneTarget,
+    plan_genes,
+    read_gene_profiles,
+    read_gnn_genes,
+)
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.reporting import (
     CardinalIndex,
@@ -286,3 +292,23 @@ def test_validate_flags_broken_reporting(ontology) -> None:
         "reported_count_mismatch",
         "budget_outside_histogram",
     }
+
+
+def test_genes_v2_fields_are_read_like_genes_v1(tmp_path) -> None:
+    data = read_gene_profiles(fixture_path("hpoa") / "gene_profiles.json")
+    for record in data["genes"].values():
+        for entity in record["entities"]:
+            entity["r1_train_patients"] = 3
+    somatic = data["genes"]["GENEA"]["entities"][1]
+    somatic.update({"sim_weight": 0.0, "weight_zero_reason": "somatic_only"})
+    path = tmp_path / "genes-v2.json"
+    path.write_text(json.dumps(data))
+
+    plan = plan_genes(
+        read_gene_profiles(path),
+        read_gnn_genes(fixture_path("hpoa") / "gnn_genes.json"),
+        {"OMIM:100001", "OMIM:100002", "OMIM:100006", "OMIM:100008", "ORPHA:3001"},
+    )
+
+    genea = next(target for target in plan.targets if target.symbol == "GENEA")
+    assert [entity.entity for entity in genea.entities] == ["OMIM:100001"]
