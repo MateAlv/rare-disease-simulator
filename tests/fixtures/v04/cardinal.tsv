@@ -1,0 +1,4 @@
+disease_id	hpo_id	kind	source
+ORPHA:3001	HP:0001627	diagnostic_criterion	orphadata-product4-fixture
+OMIM:100001	HP:0001251	cardinal_proxy	hpoa-recount-fixture
+OMIM:100001	HP:0001251	pathognomonic	orphadata-product4-fixture

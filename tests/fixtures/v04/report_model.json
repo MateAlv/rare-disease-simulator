@@ -1,0 +1,30 @@
+{
+  "format": "report-model",
+  "format_version": 1,
+  "artifact_id": "report-model-fixture",
+  "link": "logistic",
+  "intercept": -1.0,
+  "features": [
+    {"name": "frequency", "kind": "frequency", "coefficient": 2.0, "unknown_value": 0.3},
+    {"name": "information_content", "kind": "information_content", "coefficient": 0.5,
+     "source": "table", "missing_value": 1.0, "center": 2.0, "scale": 2.0},
+    {"name": "ancestor_count", "kind": "ancestor_count", "coefficient": -0.1,
+     "include_self": false},
+    {"name": "log_reportability", "kind": "log_reportability", "coefficient": 0.8,
+     "pseudocount": 1.0, "normalize": true},
+    {"name": "cardinal", "kind": "cardinal_flag", "coefficient": 1.5}
+  ],
+  "tables": {
+    "information_content": {"HP:0001250": 2.0, "HP:0001251": 3.0, "HP:0001627": 4.0}
+  },
+  "reportability": {
+    "closure": "ancestors",
+    "patients": 99,
+    "counts": {"HP:0001250": 49, "HP:0001251": 9, "HP:0001627": 19, "HP:0001249": 29}
+  },
+  "term_budget": {
+    "description": "fixture: reported present terms per case",
+    "histogram": {"0": 5, "1": 10, "2": 20, "3": 15, "4": 5}
+  },
+  "provenance": {"note": "synthetic test fixture, not fitted on any data"}
+}
