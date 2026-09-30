@@ -814,6 +814,8 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `reporting.force_cardinal` | bool | `true` |
 | `reporting.noise_count` | "poisson" / "budget_share" | `"poisson"` |
 | `reporting.noise_share` | float | `0.0` |
+| `reporting.specialize_rate` | float | `0.0` |
+| `noise.related_share` | float | `0.0` |
 | `max_redraws` | int | `20` |
 | `noise.vocabulary_path` | path | `null` |
 

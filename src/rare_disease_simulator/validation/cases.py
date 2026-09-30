@@ -41,6 +41,8 @@ from rare_disease_simulator.simulation.simulator import (
     CONGENITAL_ONSET,
     FORCED_REASON,
     MERGED_REASON,
+    RELATED_NOISE_REASON,
+    SPECIALIZED_REASON,
     SexSpecificTerms,
     ShrinkageMeanMissing,
     config_hash,
@@ -84,6 +86,9 @@ class _Accumulator:
     bucket_counts: dict[str, list[int]] = field(default_factory=lambda: defaultdict(list))
     negative_origins: Counter[str] = field(default_factory=Counter)
     positives_generalized: int = 0
+    positives_specialized: int = 0
+    positives_profile: int = 0
+    noise_related: int = 0
     forced_cases: int = 0
     observed_by_difficulty: dict[str, Counter[str]] = field(
         default_factory=lambda: defaultdict(Counter)
@@ -153,6 +158,8 @@ def validate_cases(
         },
         "positives": {
             "generalized": acc.positives_generalized,
+            "specialized": acc.positives_specialized,
+            "specialized_share": _share(acc.positives_specialized, acc.positives_profile),
             "cases_with_forced_positive": acc.forced_cases,
             "observation_rate_by_difficulty": _observation_rates(acc, config),
         },
@@ -162,6 +169,10 @@ def validate_cases(
             "per_case_mean": _mean(acc.bucket_counts["noise_phenotypes"]),
             "cases_with_noise_share": _share(
                 sum(1 for count in acc.bucket_counts["noise_phenotypes"] if count), acc.cases
+            ),
+            "related": acc.noise_related,
+            "related_share": _share(
+                acc.noise_related, sum(acc.bucket_counts["noise_phenotypes"])
             ),
         },
         "sex": _sex_report(acc, config),
@@ -335,7 +346,17 @@ def _count_case(
     for bucket in BUCKETS:
         acc.bucket_counts[bucket].append(len(getattr(case, bucket)))
     acc.negative_origins.update(p.simulated_origin for p in case.negative_phenotypes)
-    acc.positives_generalized += sum(1 for p in case.positive_phenotypes if p.source_hpo_id)
+    acc.positives_generalized += sum(
+        1 for p in case.positive_phenotypes
+        if p.source_hpo_id and p.reason != SPECIALIZED_REASON
+    )
+    acc.positives_specialized += sum(
+        1 for p in case.positive_phenotypes if p.reason == SPECIALIZED_REASON
+    )
+    acc.positives_profile += len(case.positive_phenotypes)
+    acc.noise_related += sum(
+        1 for p in case.noise_phenotypes if p.reason == RELATED_NOISE_REASON
+    )
     if any(p.reason == FORCED_REASON for p in case.positive_phenotypes):
         acc.forced_cases += 1
     observed = acc.observed_by_difficulty[case.metadata.difficulty]
@@ -426,8 +447,39 @@ def _check_case(
 
     if noise_vocabulary is not None:
         for noise in case.noise_phenotypes:
-            if noise.hpo_id not in noise_vocabulary:
+            if noise.reason != RELATED_NOISE_REASON and noise.hpo_id not in noise_vocabulary:
                 acc.violation("noise_not_in_vocabulary", case_id, noise.hpo_id)
+
+    if profile is not None:
+        profile_ids = {p.hpo_id for p in profile.phenotypes}
+        for positive in case.positive_phenotypes:
+            if positive.reason != SPECIALIZED_REASON:
+                continue
+            source = positive.source_hpo_id
+            descends = source is not None and (
+                ontology.is_a(positive.hpo_id, source) if ontology is not None else True
+            )
+            if source not in profile_ids or positive.hpo_id == source or not descends:
+                acc.violation(
+                    "specialized_not_descendant_of_true_term", case_id,
+                    f"{positive.hpo_id}<-{source}",
+                )
+        related = [n for n in case.noise_phenotypes if n.reason == RELATED_NOISE_REASON]
+        if related:
+            key = "annotated:" + profile.disease_id
+            annotated = closures.get(key)
+            if annotated is None:
+                annotated = frozenset(
+                    profile_ids.union(
+                        *(ontology.get_ancestor_set(i) for i in profile_ids)
+                    )
+                    if ontology is not None
+                    else profile_ids
+                )
+                closures[key] = annotated
+            for noise in related:
+                if noise.hpo_id in annotated:
+                    acc.violation("related_noise_annotated_to_entity", case_id, noise.hpo_id)
 
 
 def _truly_present(case: SyntheticCase) -> set[str]:
@@ -688,7 +740,9 @@ def format_report(report: Mapping[str, Any]) -> str:
         + ", ".join(f"{key} {value}" for key, value in missingness.items())
     )
     lines.append(
-        f"Noise: {report['noise']['per_case_mean']} per case; "
+        f"Noise: {report['noise']['per_case_mean']} per case "
+        f"(related share {report['noise']['related_share']}); "
+        f"specialized share of positives {report['positives']['specialized_share']}; "
         f"forced positives in {report['positives']['cases_with_forced_positive']} case(s)"
     )
     sex = report["sex"]

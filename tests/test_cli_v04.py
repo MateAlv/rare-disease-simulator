@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.4.1"
+    assert summary["simulate"]["simulator_version"] == "0.4.2"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.4.1-")
+    assert card["dataset_id"].startswith("ds-sim0.4.2-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"
@@ -170,3 +170,38 @@ def test_v04_simulate_refuses_missing_inputs(v04_run, tmp_path: Path) -> None:
                     "--report-model", str(V04 / "report_model.json"))
     assert clash.exit_code != 0
     assert "reporting.mode is observation" in _text(clash.output)
+
+
+def test_v042_knobs_are_counted_in_the_run_summary(v04_run, tmp_path: Path) -> None:
+    _, profiles, _ = v04_run
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({
+        "frequency.shrinkage_mean": 0.4,
+        "reporting.specialize_rate": 0.5,
+        "reporting.noise_count": "budget_share",
+        "reporting.noise_share": 0.4,
+        "noise.related_share": 0.3,
+    }), encoding="utf-8")
+    cases_path = tmp_path / "cases.jsonl"
+
+    result = _invoke(
+        "simulate", "--profiles", str(profiles), "--output", str(cases_path), *GENE_OPTIONS,
+        "--genes", "all", "--cases-per-gene", "60", "--difficulty", "medium",
+        "--calibration", str(calibration), *NOISE,
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "cases.summary.json").read_text("utf-8"))
+    cases = read_model_jsonl(cases_path, SyntheticCase)
+    specialized = sum(p.reason == "specialized" for c in cases for p in c.positive_phenotypes)
+    related = sum(n.reason == "related" for c in cases for n in c.noise_phenotypes)
+    assert summary["reporting"]["specialized"]["terms"] == specialized
+    assert summary["noise"]["related"] == related
+    assert summary["noise"]["terms"] == sum(len(c.noise_phenotypes) for c in cases)
+    checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
+    assert checked.exit_code == 0, checked.output
+    exported = _invoke("export-training", "--cases", str(cases_path), "--output",
+                       str(tmp_path / "ds.jsonl.gz"), "--allow-dirty")
+    assert exported.exit_code == 0, exported.output
+    for record in iter_dataset(tmp_path / "ds.jsonl.gz"):
+        assert set(record["present"]) <= set(record["true_present"])

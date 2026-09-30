@@ -9,3 +9,9 @@ def _golden() -> list[str]:
 
 def test_defaults_reproduce_simulator_041_cases() -> None:
     assert golden_lines() == _golden()
+
+
+def test_new_knobs_at_zero_reproduce_simulator_041_cases() -> None:
+    lines = golden_lines(reporting={"specialize_rate": 0.0}, noise={"related_share": 0.0})
+
+    assert lines == _golden()

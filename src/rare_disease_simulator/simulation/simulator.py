@@ -91,7 +91,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.4.1"
+SIMULATOR_VERSION = "0.4.2"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -117,6 +117,9 @@ EQUIVALENT_PROFILE_REASON = "typical_feature_absent_equivalent_profile"
 FORCED_REASON = "forced_min_one"
 MERGED_REASON = "recorded_as_generalized"
 CARDINAL_REASON = "cardinal"
+SPECIALIZED_REASON = "specialized"
+RELATED_NOISE_REASON = "related"
+VOCABULARY_NOISE_REASON = "nonspecific_finding"
 NOT_REPORTED_REASON = "not_reported"
 
 _T = TypeVar("_T")
@@ -280,6 +283,7 @@ class _DiseaseModel:
     gene_other_terms: list[_Candidate] = field(default_factory=list)
     gene_first: bool = False
     profile_ids: tuple[str, ...] | None = None
+    annotated_closure: frozenset[str] | None = None
 
 
 @dataclass
@@ -716,7 +720,7 @@ def _simulate_one_case(
         if truth:
             observation = _report(
                 model, patient, truth, profile_budget, config.reporting.force_cardinal, preset,
-                rng, ontology,
+                rng, ontology, sex_terms, config.reporting.specialize_rate,
             )
     else:
         for _ in range(config.max_redraws):
@@ -744,6 +748,8 @@ def _simulate_one_case(
         noise = _sample_noise(
             model, patient, observation.present_ids, [], preset, noise_vocabulary, rng,
             ontology, sex_terms, count=noise_slots,
+            related_share=config.noise.related_share,
+            true_ids=_true_profile_ids(observation),
         )
         negatives = _sample_negatives(
             model, patient, observation.present_ids | {term.hpo_id for term in noise},
@@ -921,13 +927,16 @@ def _report(
     preset: DifficultyPreset,
     rng: random.Random,
     ontology: HpoOntology | None,
+    sex_terms: SexSpecificTerms | None = None,
+    specialize_rate: float = 0.0,
 ) -> _Observation:
     """Record ``budget`` of the true terms: cardinal ones first, the rest by report score.
 
     Every true cardinal term is reported when the budget is at least 1, even
     beyond the budget; the remaining slots are filled without replacement with
     probability proportional to each term's reporting-model score. Reported
-    terms may be generalized to a parent; unreported ones become ``missing``
+    terms may be generalized to a parent or, when not generalized, shown as a
+    descendant with ``specialize_rate``; unreported ones become ``missing``
     (``not_reported``) or ``unknown`` by the preset's split.
     """
 
@@ -962,10 +971,26 @@ def _report(
                 _unobserved(phenotype, probability, status="missing", reason=MERGED_REASON)
             )
             return True
+        generalized = hpo_id != phenotype.hpo_id
+        reason = "generalized" if generalized else (CARDINAL_REASON if term.cardinal else None)
+        if (
+            not generalized
+            and specialize_rate > 0.0
+            and ontology is not None
+            and sex_terms is not None
+            and rng.random() < specialize_rate
+        ):
+            descendant = _specialize(
+                phenotype.hpo_id, ontology, rng, observed_ids | model.disease_term_ids,
+                sex_terms, patient.sex,
+            )
+            if descendant is not None:
+                hpo_id = descendant
+                label = ontology.get_label(descendant) or descendant
+                reason = SPECIALIZED_REASON
+        derived = hpo_id != phenotype.hpo_id
         observed_ids.add(hpo_id)
         observation.present_ids.add(hpo_id)
-        generalized = hpo_id != phenotype.hpo_id
-        reason = CARDINAL_REASON if term.cardinal else None
         observation.positives.append(
             CasePhenotype(
                 hpo_id=hpo_id,
@@ -973,9 +998,9 @@ def _report(
                 status="positive",
                 observed=True,
                 source_probability=probability,
-                source_hpo_id=phenotype.hpo_id if generalized else None,
+                source_hpo_id=phenotype.hpo_id if derived else None,
                 simulated_origin="disease_profile",
-                reason="generalized" if generalized else reason,
+                reason=reason,
             )
         )
         return True
@@ -1009,6 +1034,51 @@ def _report(
                 )
             )
     return observation
+
+
+def _specialize(
+    hpo_id: str,
+    ontology: HpoOntology,
+    rng: random.Random,
+    blocked: set[str] | frozenset[str],
+    sex_terms: SexSpecificTerms,
+    sex: Sex,
+) -> str | None:
+    """A descendant to show instead of ``hpo_id``: a child, then with p 0.5 a grandchild.
+
+    Candidates are phenotypic abnormalities allowed for the patient's sex and
+    not in ``blocked`` (terms already shown and the profile's annotated terms,
+    so the pick is more specific than any annotation). None when no child
+    qualifies; a child without a qualifying child is kept.
+    """
+
+    def eligible(ids: Sequence[str]) -> list[str]:
+        return [
+            term_id
+            for term_id in ids
+            if ontology.is_phenotypic_abnormality(term_id)
+            and term_id not in blocked
+            and sex_terms.allowed(term_id, None, sex)
+        ]
+
+    children = eligible(ontology.get_direct_children(hpo_id))
+    if not children:
+        return None
+    child = children[rng.randrange(len(children))]
+    if rng.random() < 0.5:
+        grandchildren = eligible(ontology.get_direct_children(child))
+        if grandchildren:
+            child = grandchildren[rng.randrange(len(grandchildren))]
+    return child
+
+
+def _true_profile_ids(observation: _Observation) -> list[str]:
+    """The profile terms the patient truly has, sorted."""
+
+    ids = {p.source_hpo_id or p.hpo_id for p in observation.positives}
+    ids |= {p.hpo_id for p in observation.missing}
+    ids |= {p.hpo_id for p in observation.unknown}
+    return sorted(ids)
 
 
 def _presentable_sex(
@@ -1239,8 +1309,15 @@ def _sample_noise(
     sex_terms: SexSpecificTerms,
     *,
     count: int | None = None,
+    related_share: float = 0.0,
+    true_ids: Sequence[str] = (),
 ) -> list[CasePhenotype]:
-    """Noise terms; ``count`` is drawn here unless the caller drew it already."""
+    """Noise terms; ``count`` is drawn here unless the caller drew it already.
+
+    With ``related_share`` > 0 each slot is, with that probability, a term near
+    one of ``true_ids`` (see :func:`_related_noise_term`), falling back to the
+    vocabulary when none qualifies.
+    """
 
     if count is None:
         count = noise_count(preset, noise_vocabulary, rng)
@@ -1248,8 +1325,32 @@ def _sample_noise(
         return []
     negated = _RelatedTerms(ontology, {negative.hpo_id for negative in negatives})
     pool = _noise_pool(model, patient, present_ids, negated, noise_vocabulary, sex_terms)
+    related_on = related_share > 0.0 and ontology is not None and bool(true_ids)
     noise: list[CasePhenotype] = []
-    while pool and len(noise) < count:
+    while len(noise) < count:
+        if related_on and rng.random() < related_share:
+            assert ontology is not None
+            related = _related_noise_term(
+                model, true_ids, ontology, rng,
+                present_ids | {item.hpo_id for item in noise}, negated, sex_terms, patient.sex,
+            )
+            if related is not None:
+                hpo_id, seed = related
+                pool = [term for term in pool if term.hpo_id != hpo_id]
+                noise.append(
+                    CasePhenotype(
+                        hpo_id=hpo_id,
+                        label=ontology.get_label(hpo_id) or hpo_id,
+                        status="noise",
+                        observed=True,
+                        source_hpo_id=seed,
+                        simulated_origin="noise",
+                        reason=RELATED_NOISE_REASON,
+                    )
+                )
+                continue
+        if not pool:
+            break
         term = pool.pop(_weighted_index([item.weight for item in pool], rng))
         noise.append(
             CasePhenotype(
@@ -1258,10 +1359,63 @@ def _sample_noise(
                 status="noise",
                 observed=True,
                 simulated_origin="noise",
-                reason="nonspecific_finding",
+                reason=VOCABULARY_NOISE_REASON,
             )
         )
     return noise
+
+
+def _related_noise_term(
+    model: _DiseaseModel,
+    true_ids: Sequence[str],
+    ontology: HpoOntology,
+    rng: random.Random,
+    shown: set[str],
+    negated: _RelatedTerms,
+    sex_terms: SexSpecificTerms,
+    sex: Sex,
+) -> tuple[str, str] | None:
+    """A disease-related noise term and the true term it was drawn near.
+
+    From a uniformly chosen true term, go up to a parent (uniform among
+    several) or, with probability 0.5, on to one of that parent's parents;
+    then pick uniformly among the ancestor's descendants at most 2 levels
+    down. The pick is never the ancestor, a term the profile annotates or an
+    ancestor of one, a shown term, a term related to a negative, or a term
+    the patient's sex rules out. None when nothing qualifies.
+    """
+
+    if model.annotated_closure is None:
+        closure = set(model.disease_term_ids)
+        for hpo_id in model.disease_term_ids:
+            closure |= ontology.get_ancestor_set(hpo_id)
+        model.annotated_closure = frozenset(closure)
+    seed = true_ids[rng.randrange(len(true_ids))]
+    parents = ontology.get_direct_parents(seed)
+    if not parents:
+        return None
+    anchor = parents[rng.randrange(len(parents))]
+    if rng.random() < 0.5:
+        grandparents = ontology.get_direct_parents(anchor)
+        if grandparents:
+            anchor = grandparents[rng.randrange(len(grandparents))]
+    children = ontology.get_direct_children(anchor)
+    candidates = set(children)
+    for child in children:
+        candidates.update(ontology.get_direct_children(child))
+    eligible = [
+        hpo_id
+        for hpo_id in sorted(candidates)
+        if hpo_id != anchor
+        and ontology.is_phenotypic_abnormality(hpo_id)
+        and hpo_id not in model.annotated_closure
+        and hpo_id not in shown
+        and not negated.related(hpo_id)
+        and sex_terms.allowed(hpo_id, None, sex)
+    ]
+    if not eligible:
+        return None
+    return eligible[rng.randrange(len(eligible))], seed
 
 
 def _noise_pool(

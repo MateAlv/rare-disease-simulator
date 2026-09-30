@@ -73,7 +73,9 @@ from rare_disease_simulator.simulation.reporting import (
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
 from rare_disease_simulator.simulation.schema import SimulationConfig, SyntheticCase, run_config
 from rare_disease_simulator.simulation.simulator import (
+    RELATED_NOISE_REASON,
     SIMULATOR_VERSION,
+    SPECIALIZED_REASON,
     SexSpecificTerms,
     config_hash,
     primary_gene,
@@ -781,6 +783,7 @@ def simulate(
             if reporting is not None
             else {"mode": sim_config.reporting.mode}
         ),
+        "noise": realized.noise_summary() if reporting is not None else None,
         "output": {
             "cases_path": str(output_path),
             "cases_written": written,
@@ -824,6 +827,12 @@ class _ReportedTotals:
                 self.counts["budget"] += case.metadata.report_budget
                 self.counts["profile"] += len(case.positive_phenotypes)
                 self.counts["noise"] += len(case.noise_phenotypes)
+                self.counts["specialized"] += sum(
+                    1 for p in case.positive_phenotypes if p.reason == SPECIALIZED_REASON
+                )
+                self.counts["related"] += sum(
+                    1 for p in case.noise_phenotypes if p.reason == RELATED_NOISE_REASON
+                )
             yield case
 
     def summary(self) -> dict[str, object]:
@@ -841,7 +850,22 @@ class _ReportedTotals:
             ),
             "reported_profile_mean": mean("profile"),
             "reported_noise_mean": mean("noise"),
+            "specialized": {
+                "terms": self.counts["specialized"],
+                "share_of_profile_terms": self._share("specialized", "profile"),
+            },
         }
+
+    def noise_summary(self) -> dict[str, object]:
+        return {
+            "terms": self.counts["noise"],
+            "related": self.counts["related"],
+            "related_share": self._share("related", "noise"),
+        }
+
+    def _share(self, part: str, whole: str) -> float | None:
+        total = self.counts[whole]
+        return round(self.counts[part] / total, 4) if total else None
 
 
 def _check_count_estimator(config: SimulationConfig, profiles: list[DiseaseProfile]) -> None:
