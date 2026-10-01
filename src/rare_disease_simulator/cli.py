@@ -843,6 +843,9 @@ class _ReportedTotals:
         self.mode = mode
         self.counts: Counter[str] = Counter()
         self.q_sum = 0.0
+        self.k_counts: Counter[int] = Counter()
+        self.realized_counts: Counter[int] = Counter()
+        self.scale_sum = 0.0
 
     def track(self, cases: Iterable[SyntheticCase]) -> Iterator[SyntheticCase]:
         for case in cases:
@@ -880,6 +883,10 @@ class _ReportedTotals:
         self.q_sum += sum(rolled)
         forced = sum(1 for p in case.positive_phenotypes if p.reason == FORCED_REASON)
         self.counts["forced_min_one"] += forced
+        if case.metadata.report_budget is not None:
+            self.k_counts[case.metadata.report_budget] += 1
+            self.realized_counts[len(shown) + len(merged)] += 1
+            self.scale_sum += case.metadata.report_scale or 0.0
 
     def summary(self) -> dict[str, object]:
         cases = self.counts["cases"]
@@ -905,6 +912,7 @@ class _ReportedTotals:
                 ),
                 "q_capped_share": self._share("q_capped", "q_terms"),
                 "forced_min_one": self.counts["forced_min_one"],
+                "budget_normalized": self._normalized_summary(),
                 "specialized": {
                     "terms": self.counts["specialized"],
                     "share_of_profile_terms": self._share("specialized", "profile"),
@@ -923,6 +931,25 @@ class _ReportedTotals:
                 "terms": self.counts["specialized"],
                 "share_of_profile_terms": self._share("specialized", "profile"),
             },
+        }
+
+    def _normalized_summary(self) -> dict[str, object] | None:
+        cases = sum(self.k_counts.values())
+        if not cases:
+            return None
+        k_shares = {k: n / cases for k, n in self.k_counts.items()}
+        realized = {k: n / cases for k, n in self.realized_counts.items()}
+        variation = 0.5 * sum(
+            abs(k_shares.get(k, 0.0) - realized.get(k, 0.0)) for k in set(k_shares) | set(realized)
+        )
+        return {
+            "cases": cases,
+            "k_mean": round(sum(k * n for k, n in self.k_counts.items()) / cases, 4),
+            "realized_profile_mean": round(
+                sum(k * n for k, n in self.realized_counts.items()) / cases, 4
+            ),
+            "total_variation_k_vs_realized": round(variation, 4),
+            "scale_mean": round(self.scale_sum / cases, 4),
         }
 
     def noise_summary(self) -> dict[str, object]:

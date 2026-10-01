@@ -844,6 +844,8 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `reporting.noise_share` | float | `0.0` |
 | `reporting.specialize_rate` | float | `0.0` |
 | `reporting.q_scale` | float | `1.0` |
+| `reporting.budget_normalize` | bool | `false` |
+| `reporting.profile_budget_histogram` | dict or null | `null` |
 | `noise.related_share` | float | `0.0` |
 | `noise.related_up_levels` | int | `2` |
 | `noise.related_down_levels` | int | `2` |

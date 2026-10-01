@@ -108,6 +108,9 @@ class _Accumulator:
     reported: Counter[int] = field(default_factory=Counter)
     reported_total: Counter[int] = field(default_factory=Counter)
     q_rolls: list[tuple[float, bool]] = field(default_factory=list)
+    normalized_k: Counter[int] = field(default_factory=Counter)
+    normalized_realized: Counter[int] = field(default_factory=Counter)
+    normalized_scales: list[float] = field(default_factory=list)
     presentation_age_cases: int = 0
     independent: Counter[str] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
@@ -146,10 +149,10 @@ def validate_cases(
             acc.case_profiles.setdefault(_profile_key(case), profile)
         _count_case(acc, case, profile, config)
         _check_case(acc, case, profile, ontology, config, sex_terms, noise_vocabulary, closures)
-        if case.metadata.report_budget is not None:
-            _check_reporting(acc, case, budget, cardinal, force_cardinal)
-        elif config is not None and config.reporting.mode == "independent":
+        if config is not None and config.reporting.mode == "independent":
             _collect_report_rolls(acc, case)
+        elif case.metadata.report_budget is not None:
+            _check_reporting(acc, case, budget, cardinal, force_cardinal)
 
     return {
         "cases": acc.cases,
@@ -315,6 +318,13 @@ def _collect_report_rolls(acc: _Accumulator, case: SyntheticCase) -> None:
     rolls.extend((p.report_probability, False) for p in case.unknown_phenotypes)
     acc.independent["true_terms"] += len(rolls)
     acc.independent["noise"] += len(case.noise_phenotypes)
+    if case.metadata.report_budget is not None:
+        shown = sum(1 for p in case.positive_phenotypes if p.simulated_origin == "disease_profile")
+        shown += sum(1 for p in case.missing_phenotypes if p.reason == MERGED_REASON)
+        acc.normalized_k[case.metadata.report_budget] += 1
+        acc.normalized_realized[shown] += 1
+        if case.metadata.report_scale is not None:
+            acc.normalized_scales.append(case.metadata.report_scale)
     acc.q_rolls.extend((q, reported) for q, reported in rolls if q is not None)
 
 
@@ -353,6 +363,30 @@ def _independent_report(acc: _Accumulator) -> dict[str, Any]:
         "q_mean": round(sum(q for q, _ in acc.q_rolls) / rolls, 4) if rolls else None,
         "q_capped_share": _share(sum(1 for q, _ in acc.q_rolls if q >= 1.0), rolls),
         "forced_min_one": acc.independent["forced_min_one"],
+        "budget_normalized": _normalized_report(acc),
+    }
+
+
+def _normalized_report(acc: _Accumulator) -> dict[str, Any] | None:
+    """Budget-normalized cases: realized profile terms per case against the drawn k."""
+
+    cases = sum(acc.normalized_k.values())
+    if not cases:
+        return None
+    k_shares = {k: n / cases for k, n in acc.normalized_k.items()}
+    realized_shares = {k: n / cases for k, n in acc.normalized_realized.items()}
+    return {
+        "cases": cases,
+        "k_mean": round(sum(k * n for k, n in acc.normalized_k.items()) / cases, 3),
+        "realized_mean": round(
+            sum(k * n for k, n in acc.normalized_realized.items()) / cases, 3
+        ),
+        "k_distribution": _share_table(k_shares),
+        "realized_distribution": _share_table(realized_shares),
+        "total_variation_realized_vs_k": _total_variation(realized_shares, k_shares),
+        "scale_mean": (
+            round(statistics.fmean(acc.normalized_scales), 4) if acc.normalized_scales else None
+        ),
     }
 
 
@@ -908,6 +942,14 @@ def format_report(report: Mapping[str, Any]) -> str:
             lines.append(
                 f"  q [{row['q_range'][0]:.1f}, {row['q_range'][1]:.1f}): mean q "
                 f"{row['mean_q']}, reported {row['reported_share']} (n={row['terms']})"
+            )
+        normalized = reporting.get("budget_normalized")
+        if normalized is not None:
+            lines.append(
+                f"  budget-normalized ({normalized['cases']} cases): k mean "
+                f"{normalized['k_mean']}, realized profile terms {normalized['realized_mean']}, "
+                f"TV {normalized['total_variation_realized_vs_k']}, "
+                f"mean c {normalized['scale_mean']}"
             )
     elif reporting is not None:
         lines.append(

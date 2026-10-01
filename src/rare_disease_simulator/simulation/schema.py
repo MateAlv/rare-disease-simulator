@@ -137,6 +137,18 @@ class GeneratorMetadata(StrictBaseModel):
         description="Presentation-age range [low, high] the case's age was drawn from "
         "(presentation-ages file); unset when the onset-plus-duration rule set it.",
     )
+    report_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Budget-normalized independent reporting: true terms whose roll reported "
+        "them (1 when forced_min_one).",
+    )
+    report_scale: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Budget-normalized independent reporting: the factor c with "
+        "sum(min(1, c * q)) = min(k, true terms).",
+    )
     difficulty: Difficulty
     generated_at: datetime | None = Field(
         default=None,
@@ -393,6 +405,17 @@ class ReportingSettings(StrictBaseModel):
         description="Independent mode: q = min(1, q_scale * score / frequency); calibrated so "
         "reported explained terms per case match real patients.",
     )
+    budget_normalize: bool = Field(
+        default=False,
+        description="Independent mode: draw a profile-term budget k per case from "
+        "profile_budget_histogram and scale every true term's q by one factor c so the "
+        "expected reported count is min(k, true terms); terms are still rolled independently.",
+    )
+    profile_budget_histogram: dict[str, int] | None = Field(
+        default=None,
+        description="Reported profile terms per real case, {str(k): count}; required by "
+        "budget_normalize. The 0 bin is ignored and the rest renormalised.",
+    )
 
     @model_validator(mode="after")
     def _check_noise_count(self) -> ReportingSettings:
@@ -403,7 +426,30 @@ class ReportingSettings(StrictBaseModel):
             raise ValueError("noise_count 'proportional' is for independent mode")
         if self.noise_count == "proportional" and self.noise_share >= 1.0:
             raise ValueError("noise_share must be below 1 for noise_count 'proportional'")
+        if self.budget_normalize:
+            if self.mode != "independent":
+                raise ValueError("budget_normalize applies only to independent mode")
+            if self.profile_budget_histogram is None:
+                raise ValueError("budget_normalize needs profile_budget_histogram")
+        if self.profile_budget_histogram is not None:
+            self.profile_budget()
         return self
+
+    def profile_budget(self) -> dict[int, int]:
+        """The profile-budget histogram with integer keys, checked."""
+
+        histogram: dict[int, int] = {}
+        for key, count in (self.profile_budget_histogram or {}).items():
+            try:
+                k = int(key)
+            except ValueError as exc:
+                raise ValueError(f"profile_budget_histogram key {key!r} is not an int") from exc
+            if k < 0 or count < 0:
+                raise ValueError("profile_budget_histogram keys and counts must be >= 0")
+            histogram[k] = count
+        if sum(count for k, count in histogram.items() if k >= 1) <= 0:
+            raise ValueError("profile_budget_histogram has no case with at least 1 term")
+        return histogram
 
 
 class NoiseSettings(StrictBaseModel):
