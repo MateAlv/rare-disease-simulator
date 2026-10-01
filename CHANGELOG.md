@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-01
+
+ANALYSIS-006 (`diagnostic.ar-training`): with budget normalization, the budget covered only profile terms and noise came on top, and records were still short (5.74 terms per case against 8.70 real). The default keeps 0.5.2 behaviour.
+
+### Added
+- `reporting.budget_scope: record` (with independent mode and `budget_normalize`): `k` is drawn from `profile_budget_histogram` read as total present terms per case, `n ~ Binomial(k, noise_share)` noise slots (capped at `k − 1` and the showable vocabulary; related-noise rules apply) come out of it, and the profile target is `min(k − n, true terms with q > 0)`. Cases record `report_budget`, `report_budget_profile` (`k − n`), `report_count` and `report_scale`.
+- `validate`: in the record scope, total shown terms per case against `k` (mean, distribution, total variation), noise and profile-target means, and `profile_budget_mismatch`.
+- Run summary: `reporting.budget_normalized.record` with mean `k`, noise, profile target, realized profile terms, total shown terms and their total variation against the `k` histogram.
+- `tests/fixtures/v04/golden_0.5.2.jsonl.gz`: cases written by the 0.5.2 code, which the defaults must reproduce.
+
+### Changed
+- `SIMULATOR_VERSION` 0.5.3.
+- In independent mode `noise_count: budget_share` needs the record scope, and the record scope needs `budget_share`; `proportional` stays with the profile scope.
+
 ## [0.5.2] - 2026-10-01
 
 ANALYSIS-005 (`diagnostic.ar-training`): in independent mode, a record's length followed the profile's true-term count (Spearman 0.966 across genes vs 0.53 real), so genes with real patients averaged 14.3 simulated terms against 8.1 real. The default keeps 0.5.1 behaviour.
