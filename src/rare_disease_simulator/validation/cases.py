@@ -111,6 +111,8 @@ class _Accumulator:
     normalized_k: Counter[int] = field(default_factory=Counter)
     normalized_realized: Counter[int] = field(default_factory=Counter)
     normalized_scales: list[float] = field(default_factory=list)
+    record_totals: Counter[int] = field(default_factory=Counter)
+    record_counts: Counter[str] = field(default_factory=Counter)
     presentation_age_cases: int = 0
     independent: Counter[str] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
@@ -325,6 +327,18 @@ def _collect_report_rolls(acc: _Accumulator, case: SyntheticCase) -> None:
         acc.normalized_realized[shown] += 1
         if case.metadata.report_scale is not None:
             acc.normalized_scales.append(case.metadata.report_scale)
+        target = case.metadata.report_budget_profile
+        if target is not None:
+            k, noise = case.metadata.report_budget, len(case.noise_phenotypes)
+            acc.record_totals[shown + noise] += 1
+            acc.record_counts["cases"] += 1
+            acc.record_counts["noise"] += noise
+            acc.record_counts["target"] += target
+            if not 1 <= target <= k - noise:
+                acc.violation(
+                    "profile_budget_mismatch", case.case_id,
+                    f"profile target {target} for k={k} with {noise} noise",
+                )
     acc.q_rolls.extend((q, reported) for q, reported in rolls if q is not None)
 
 
@@ -387,6 +401,24 @@ def _normalized_report(acc: _Accumulator) -> dict[str, Any] | None:
         "scale_mean": (
             round(statistics.fmean(acc.normalized_scales), 4) if acc.normalized_scales else None
         ),
+        "record": _record_scope_report(acc, k_shares),
+    }
+
+
+def _record_scope_report(acc: _Accumulator, k_shares: Mapping[int, float]) -> dict | None:
+    """Record-scope cases: total shown terms (profile plus noise) against k."""
+
+    cases = acc.record_counts["cases"]
+    if not cases:
+        return None
+    totals = {k: n / cases for k, n in acc.record_totals.items()}
+    return {
+        "cases": cases,
+        "total_mean": round(sum(k * n for k, n in acc.record_totals.items()) / cases, 3),
+        "total_distribution": _share_table(totals),
+        "total_variation_total_vs_k": _total_variation(totals, k_shares),
+        "noise_mean": round(acc.record_counts["noise"] / cases, 3),
+        "profile_target_mean": round(acc.record_counts["target"] / cases, 3),
     }
 
 
@@ -951,6 +983,14 @@ def format_report(report: Mapping[str, Any]) -> str:
                 f"TV {normalized['total_variation_realized_vs_k']}, "
                 f"mean c {normalized['scale_mean']}"
             )
+            record = normalized.get("record")
+            if record is not None:
+                lines.append(
+                    f"  record scope: total shown {record['total_mean']} per case "
+                    f"(noise {record['noise_mean']}, profile target "
+                    f"{record['profile_target_mean']}), TV vs k "
+                    f"{record['total_variation_total_vs_k']}"
+                )
     elif reporting is not None:
         lines.append(
             f"Reporting ({reporting['cases']} report-model cases): budget mean "

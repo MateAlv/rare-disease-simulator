@@ -96,7 +96,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.5.2"
+SIMULATOR_VERSION = "0.5.3"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -783,9 +783,27 @@ def _simulate_one_case(
             truth = _sample_truth(patient, rng)
             if truth:
                 break
+        record = config.reporting.budget_scope == "record"
+        if record:
+            assert budget_sampler is not None
+            # The histogram counts every present term of a record: noise takes n
+            # of its k slots and the profile terms aim at the rest.
+            k = budget_sampler.draw(rng)
+            noise_slots = min(
+                budget_share_noise_count(k, config.reporting.noise_share, noise_vocabulary, rng),
+                len(_noise_pool(model, patient, set(), None, noise_vocabulary, sex_terms)),
+            )
+            extras = {"report_budget": k, "report_budget_profile": k - noise_slots}
         if truth:
             probabilities = {i: model.terms[i].report_probability for i in truth}
-            if budget_sampler is not None:
+            if record:
+                scaled, scale = budget_scaled_probabilities(
+                    [model.terms[i].report_q_raw for i in truth],
+                    min(k - noise_slots, len(truth)),
+                )
+                probabilities = dict(zip(truth, scaled, strict=True))
+                extras["report_scale"] = round(scale, 6)
+            elif budget_sampler is not None:
                 k = budget_sampler.draw(rng)
                 scaled, scale = budget_scaled_probabilities(
                     [model.terms[i].report_q_raw for i in truth], min(k, len(truth))
@@ -815,7 +833,7 @@ def _simulate_one_case(
     if observation is None or not observation.positives:
         patient = _presentable_sex(model, patient, sex_terms)
         observation = _forced_observation(model, patient, sex_terms)
-    if config.reporting.mode == "independent":
+    if config.reporting.mode == "independent" and noise_slots is None:
         noise_slots = min(
             _independent_noise_count(
                 config, preset, len(observation.positives), noise_vocabulary, rng

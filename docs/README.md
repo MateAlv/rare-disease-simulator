@@ -855,6 +855,7 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `reporting.specialize_rate` | float | `0.0` |
 | `reporting.q_scale` | float | `1.0` |
 | `reporting.budget_normalize` | bool | `false` |
+| `reporting.budget_scope` | "profile" / "record" | `"profile"` |
 | `reporting.profile_budget_histogram` | dict or null | `null` |
 | `noise.related_share` | float | `0.0` |
 | `noise.related_up_levels` | int | `2` |
