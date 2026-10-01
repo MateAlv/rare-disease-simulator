@@ -64,10 +64,12 @@ from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
 from rare_disease_simulator.simulation.reporting import (
     CardinalIndex,
+    PresentationAges,
     Reporting,
     ReportingArtifactError,
     ReportModel,
     load_cardinal,
+    load_presentation_ages,
     load_report_model,
 )
 from rare_disease_simulator.simulation.sampling import sample_diseases as sample_diseases_by_stratum
@@ -598,6 +600,16 @@ def simulate(
             dir_okay=False,
         ),
     ] = None,
+    presentation_ages: Annotated[
+        Path | None,
+        typer.Option(
+            "--presentation-ages",
+            help="TSV (disease_id, age_low_years, age_high_years, source) of age-at-"
+            "presentation ranges; a listed disease draws its age from it (default: "
+            "sources.presentation_ages_path).",
+            dir_okay=False,
+        ),
+    ] = None,
     difficulty: Annotated[
         list[str] | None,
         typer.Option("--difficulty", help="Override the difficulties (repeatable)."),
@@ -685,6 +697,8 @@ def simulate(
     reporting, reporting_inputs = _load_reporting(
         config, sim_config, report_model, cardinal, ontology, profile_records
     )
+    ages, ages_inputs = _load_presentation_ages(config, presentation_ages)
+    reporting_inputs.update(ages_inputs)
     confounders = ConfounderIndex(
         profile_records,
         ontology,
@@ -732,6 +746,7 @@ def simulate(
         "sex_terms": sex_terms,
         "source_versions": source_versions,
         "reporting": reporting,
+        "presentation_ages": ages,
     }
     if plan is not None:
         cases: Iterable[SyntheticCase] = (
@@ -786,6 +801,11 @@ def simulate(
             else {"mode": sim_config.reporting.mode}
         ),
         "noise": realized.noise_summary() if reporting is not None else None,
+        "presentation_ages": (
+            {"diseases": len(ages.ranges), "cases": realized.counts["presentation_age_cases"]}
+            if ages is not None
+            else None
+        ),
         "output": {
             "cases_path": str(output_path),
             "cases_written": written,
@@ -822,9 +842,12 @@ class _ReportedTotals:
     def __init__(self, mode: str = "report_model") -> None:
         self.mode = mode
         self.counts: Counter[str] = Counter()
+        self.q_sum = 0.0
 
     def track(self, cases: Iterable[SyntheticCase]) -> Iterator[SyntheticCase]:
         for case in cases:
+            if case.metadata.presentation_age_years is not None:
+                self.counts["presentation_age_cases"] += 1
             if case.metadata.report_budget is not None or self.mode == "independent":
                 self.counts["cases"] += 1
                 self.counts["budget"] += case.metadata.report_budget or 0
@@ -854,6 +877,7 @@ class _ReportedTotals:
         ]
         self.counts["q_terms"] += len(rolled)
         self.counts["q_capped"] += sum(1 for q in rolled if q >= 1.0)
+        self.q_sum += sum(rolled)
         forced = sum(1 for p in case.positive_phenotypes if p.reason == FORCED_REASON)
         self.counts["forced_min_one"] += forced
 
@@ -874,6 +898,11 @@ class _ReportedTotals:
                     else None
                 ),
                 "true_terms_reported_share": self._share("true_terms_reported", "true_terms"),
+                "q_mean": (
+                    round(self.q_sum / self.counts["q_terms"], 4)
+                    if self.counts["q_terms"]
+                    else None
+                ),
                 "q_capped_share": self._share("q_capped", "q_terms"),
                 "forced_min_one": self.counts["forced_min_one"],
                 "specialized": {
@@ -1013,6 +1042,25 @@ def _load_reporting(
         )
     model_record["artifact_id"] = model.artifact_id
     return reporting, {"report_model": model_record, "cardinal": cardinal_record}
+
+
+def _load_presentation_ages(
+    config: AppConfig, given: Path | None
+) -> tuple[PresentationAges | None, dict[str, dict[str, object] | None]]:
+    path = given or config.sources.presentation_ages_path
+    if path is None:
+        return None, {}
+    record = _pinned_record(
+        _required_file(path, "presentation ages"),
+        config.sources.presentation_ages_sha256,
+        given is None,
+        "sources.presentation_ages_sha256",
+    )
+    try:
+        ages = load_presentation_ages(path)
+    except ReportingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return ages, {"presentation_ages": record}
 
 
 def _merge_summary(

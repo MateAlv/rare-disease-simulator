@@ -327,6 +327,17 @@ class TermScorer:
                 )
         self._cache: dict[tuple[str, float | None, bool], float] = {}
 
+    def information_content(self, hpo_id: str) -> float:
+        """The term's value of the model's information_content feature, before scaling."""
+
+        for feature in self.model.features:
+            if isinstance(feature, InformationContentFeature):
+                return self._value(feature, hpo_id, None, False)
+        raise ReportingArtifactError("the report model has no information_content feature")
+
+    def has_information_content(self) -> bool:
+        return any(isinstance(f, InformationContentFeature) for f in self.model.features)
+
     def values(self, hpo_id: str, frequency: float | None, cardinal: bool) -> dict[str, float]:
         """Raw feature values (before centering and scaling), by feature name."""
 
@@ -452,6 +463,61 @@ class Reporting:
             "budget_zero_cases_dropped": self.budget.dropped_zero_cases,
             "cardinal": self.cardinal.summary() if self.cardinal is not None else None,
         }
+
+
+@dataclass(frozen=True)
+class PresentationAges:
+    """``presentation-ages``: an age-at-presentation range per disease id."""
+
+    ranges: Mapping[str, tuple[float, float]]
+
+    def range_for(self, disease_ids: Iterable[str]) -> tuple[float, float] | None:
+        """The first listed id's range (the entity, then its profile ids), else None."""
+
+        for disease_id in disease_ids:
+            found = self.ranges.get(disease_id)
+            if found is not None:
+                return found
+        return None
+
+
+PRESENTATION_AGE_COLUMNS = ("disease_id", "age_low_years", "age_high_years", "source")
+
+
+def load_presentation_ages(path: Path | str) -> PresentationAges:
+    """Read a presentation-ages TSV; a wrong header, id, range or duplicate is an error."""
+
+    ages_path = Path(path)
+    ranges: dict[str, tuple[float, float]] = {}
+    with ages_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        header = next(reader, None)
+        if header is None or tuple(header) != PRESENTATION_AGE_COLUMNS:
+            raise ReportingArtifactError(
+                f"{ages_path}: header must be {list(PRESENTATION_AGE_COLUMNS)} "
+                f"(tab-separated), got {header!r}"
+            )
+        for line_number, row in enumerate(reader, start=2):
+            if not row or not any(row):
+                continue
+            where = f"{ages_path}:{line_number}"
+            if len(row) != len(PRESENTATION_AGE_COLUMNS):
+                raise ReportingArtifactError(f"{where}: expected 4 columns")
+            disease_id, low_text, high_text, source = row
+            if not _DISEASE_ID_RE.match(disease_id):
+                raise ReportingArtifactError(f"{where}: bad disease id {disease_id!r}")
+            try:
+                low, high = float(low_text), float(high_text)
+            except ValueError as exc:
+                raise ReportingArtifactError(f"{where}: ages must be numbers") from exc
+            if not 0.0 <= low <= high or not math.isfinite(high):
+                raise ReportingArtifactError(f"{where}: need 0 <= low <= high, got {low}, {high}")
+            if not source:
+                raise ReportingArtifactError(f"{where}: empty source")
+            if disease_id in ranges:
+                raise ReportingArtifactError(f"{where}: duplicate disease id {disease_id}")
+            ranges[disease_id] = (low, high)
+    return PresentationAges(ranges=dict(sorted(ranges.items())))
 
 
 def _profile_information_content(

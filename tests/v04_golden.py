@@ -1,7 +1,9 @@
-"""Cases used to check that new knobs left at 0 reproduce simulator 0.4.1 exactly.
+"""Cases used to check that new knobs left at their defaults reproduce older output.
 
 ``tests/fixtures/v04/golden_0.4.1.jsonl.gz`` was written by this module with the
-0.4.1 code (b645c60). Each line is a case without the fields that name the
+0.4.1 code (b645c60), and ``golden_0.5.0_independent.jsonl.gz`` (independent
+reporting, proportional and related noise, per-onset durations) with the 0.5.0
+code (020e41d). Each line is a case without the fields that name the
 simulator build (``simulator_version``, ``config_hash``). Lines are compared
 without null fields, as ``write_jsonl`` writes cases, so a new optional field
 left unset keeps the comparison byte-for-byte meaningful.
@@ -22,6 +24,7 @@ from tests.test_simulation_v02 import _config as _base_config
 from tests.test_v04_simulation import CARDINAL
 
 GOLDEN = fixture_path("v04") / "golden_0.4.1.jsonl.gz"
+GOLDEN_INDEPENDENT = fixture_path("v04") / "golden_0.5.0_independent.jsonl.gz"
 NOISE = [
     NoiseTerm(hpo_id, TERMS[hpo_id][0])
     for hpo_id in ("HP:0000964", "HP:0000988", "HP:0000008", "HP:0000028", "HP:0000505")
@@ -32,19 +35,28 @@ SCENARIOS = {
         "reporting": {"mode": "report_model", "noise_count": "budget_share", "noise_share": 0.4}
     },
 }
+INDEPENDENT_SCENARIOS = {
+    "independent": {
+        "reporting": {"mode": "independent", "noise_count": "proportional", "noise_share": 0.24,
+                      "specialize_rate": 0.3},
+        "noise": {"related_share": 0.5},
+        "age": {"duration_mean_by_onset": {"infantile": 9.8}},
+    },
+}
 
 
-def golden_lines(**extra: object) -> list[str]:
+def golden_lines(scenarios: dict | None = None, **extra: dict) -> list[str]:
     ontology = build_ontology()
     reporting = Reporting.build(
         load_report_model(fixture_path("v04") / "report_model.json"),
         ontology=ontology, profiles=ALL_PROFILES, cardinal=CARDINAL,
     )
     lines: list[str] = []
-    for name, overrides in SCENARIOS.items():
-        merged = {**overrides, **extra}
-        if "reporting" in extra:
-            merged["reporting"] = {**overrides["reporting"], **extra["reporting"]}
+    for name, overrides in (scenarios or SCENARIOS).items():
+        merged = {
+            key: {**overrides.get(key, {}), **extra.get(key, {})}
+            for key in set(overrides) | set(extra)
+        }
         config = _base_config(
             cases_per_disease_per_difficulty=40, difficulties=["medium", "hard"], **merged
         )
@@ -59,10 +71,10 @@ def golden_lines(**extra: object) -> list[str]:
     return lines
 
 
-def golden_file_lines() -> list[str]:
+def golden_file_lines(path=GOLDEN) -> list[str]:
     """The stored golden cases, without null fields."""
 
-    raw = gzip.decompress(GOLDEN.read_bytes()).decode().splitlines()
+    raw = gzip.decompress(path.read_bytes()).decode().splitlines()
     return [json.dumps(_without_nulls(json.loads(line)), sort_keys=True) for line in raw]
 
 
@@ -74,5 +86,14 @@ def _without_nulls(value: object) -> object:
     return value
 
 
+def _write(path, lines: list[str]) -> None:
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode(), mtime=0))
+
+
 if __name__ == "__main__":
-    GOLDEN.write_bytes(gzip.compress(("\n".join(golden_lines()) + "\n").encode(), mtime=0))
+    import sys
+
+    if sys.argv[1:] == ["independent"]:
+        _write(GOLDEN_INDEPENDENT, golden_lines(INDEPENDENT_SCENARIOS))
+    else:
+        _write(GOLDEN, golden_lines())

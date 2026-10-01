@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-01
+
+Candidate 4 (`diagnostic.ar-training` PR #44) reported only 17–19% of true terms in independent mode, drew related noise more specific than real terms, and kept ages far below real ones. Every new knob defaults to 0.5.0 behaviour.
+
+### Added
+- `reporting.q_scale`: independent mode uses `q = min(1, q_scale · π / f)`. `validate` and the run summary record the realized `q_mean` next to `q_capped_share`.
+- `noise.related_up_levels` and `noise.related_down_levels` (defaults 2 and 2, the 0.5.0 reach), and `noise.related_max_ic`, which skips related-noise candidates above an IC computed with the report model's `information_content` feature and falls back to the vocabulary.
+- `--presentation-ages` / `sources.presentation_ages_path` (optional `sources.presentation_ages_sha256` pin): age-at-presentation ranges per disease id. A listed entity, or any of its profile ids, draws its age uniformly in the range, raised to the onset and cut at `max_age_years`. `metadata.presentation_age_years` records the range. The run summary and dataset card record the file's sha256 and the cases that used it, and `validate` checks their ages (`presentation_age_out_of_range`).
+- `tests/fixtures/v04/golden_0.5.0_independent.jsonl.gz`: independent-mode cases written by the 0.5.0 code, which the defaults must reproduce.
+
+### Changed
+- `SIMULATOR_VERSION` 0.5.1.
+
 ## [0.5.0] - 2026-09-30
 
 An independent review of 16 construction-side disease cards found hallmark features rarely reported (10 of 16) and records dominated by unrelated noise (9 of 16), and simulated ages far below real ones. Every new knob defaults to 0.4.2 behaviour.

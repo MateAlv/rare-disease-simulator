@@ -108,6 +108,7 @@ class _Accumulator:
     reported: Counter[int] = field(default_factory=Counter)
     reported_total: Counter[int] = field(default_factory=Counter)
     q_rolls: list[tuple[float, bool]] = field(default_factory=list)
+    presentation_age_cases: int = 0
     independent: Counter[str] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
     violations: Counter[str] = field(default_factory=Counter)
@@ -183,7 +184,10 @@ def validate_cases(
             ),
         },
         "sex": _sex_report(acc, config),
-        "age": _age_report(acc.ages, acc.cases),
+        "age": {
+            **_age_report(acc.ages, acc.cases),
+            "presentation_age_cases": acc.presentation_age_cases,
+        },
         "onset": {
             **_age_report(acc.onsets, acc.cases),
             "by_category": _category_report(acc.onset_categories, acc.expected_onset),
@@ -346,6 +350,7 @@ def _independent_report(acc: _Accumulator) -> dict[str, Any]:
         "true_terms_reported_share": _share(
             acc.independent["reported"], acc.independent["true_terms"]
         ),
+        "q_mean": round(sum(q for q, _ in acc.q_rolls) / rolls, 4) if rolls else None,
         "q_capped_share": _share(sum(1 for q, _ in acc.q_rolls if q >= 1.0), rolls),
         "forced_min_one": acc.independent["forced_min_one"],
     }
@@ -496,6 +501,11 @@ def _check_case(
             acc.violation("gene_other_negative_annotated_to_profile", case_id, negative.hpo_id)
 
     patient = case.patient
+    age_range = case.metadata.presentation_age_years
+    if age_range is not None:
+        acc.presentation_age_cases += 1
+        if patient.age is not None:
+            _check_presentation_age(acc, case, age_range, config)
     if (
         patient.age is not None
         and patient.age_of_onset is not None
@@ -556,6 +566,34 @@ def _check_case(
                 )
                 if noise.hpo_id in annotated or below:
                     acc.violation("related_noise_annotated_to_entity", case_id, noise.hpo_id)
+
+
+AGE_ROUNDING = 0.006
+
+
+def _check_presentation_age(
+    acc: _Accumulator,
+    case: SyntheticCase,
+    age_range: tuple[float, float],
+    config: SimulationConfig | None,
+) -> None:
+    """The age is uniform in [low, high], raised to the onset and cut at max_age_years."""
+
+    assert case.patient.age is not None
+    age = case.patient.age.value
+    low, high = age_range
+    max_age = config.age.max_age_years if config is not None else float("inf")
+    lowest, highest = min(low, max_age), min(high, max_age)
+    onset = case.patient.age_of_onset
+    if onset is not None:
+        lowest, highest = max(onset.value, lowest), max(onset.value, highest)
+        too_high = age > highest + AGE_ROUNDING
+    else:
+        too_high = age > max(highest, max_age) + AGE_ROUNDING
+    if age < lowest - AGE_ROUNDING or too_high:
+        acc.violation(
+            "presentation_age_out_of_range", case.case_id, f"{age} not in [{low}, {high}]"
+        )
 
 
 def _truly_present(case: SyntheticCase) -> set[str]:
