@@ -60,7 +60,7 @@ import hashlib
 import json
 import math
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TypeVar
 
@@ -77,7 +77,7 @@ from rare_disease_simulator.profiles.schema import (
     SexRestriction,
 )
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
-from rare_disease_simulator.simulation.reporting import Reporting
+from rare_disease_simulator.simulation.reporting import PresentationAges, Reporting
 from rare_disease_simulator.simulation.schema import (
     Age,
     CasePhenotype,
@@ -87,6 +87,7 @@ from rare_disease_simulator.simulation.schema import (
     FrequencySettings,
     GeneratorMetadata,
     NegativeSource,
+    NoiseSettings,
     PatientAttributes,
     Sex,
     SexPriorKey,
@@ -95,7 +96,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.5.0"
+SIMULATOR_VERSION = "0.5.1"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -291,6 +292,7 @@ class _DiseaseModel:
     gene_first: bool = False
     profile_ids: tuple[str, ...] | None = None
     annotated_closure: frozenset[str] | None = None
+    presentation_age: tuple[float, float] | None = None
 
 
 @dataclass
@@ -324,6 +326,7 @@ def simulate_cases(
     source_versions: Mapping[str, str] | None = None,
     sex_terms: SexSpecificTerms | None = None,
     reporting: Reporting | None = None,
+    presentation_ages: PresentationAges | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for a single disease profile.
 
@@ -336,6 +339,8 @@ def simulate_cases(
 
     _check_reporting(config, reporting)
     model = _disease_model(profile, config, confounders, reporting, (profile.disease_id,))
+    if presentation_ages is not None:
+        model.presentation_age = presentation_ages.range_for((profile.disease_id,))
     sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
     cfg_hash = config_hash(config)
     cases: list[SyntheticCase] = []
@@ -367,6 +372,7 @@ def simulate_cases(
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
                         profile_version, source_versions, *budget,
+                        presentation_age=model.presentation_age,
                     ),
                     **case,
                 )
@@ -386,6 +392,7 @@ def simulate_gene_cases(
     source_versions: Mapping[str, str] | None = None,
     sex_terms: SexSpecificTerms | None = None,
     reporting: Reporting | None = None,
+    presentation_ages: PresentationAges | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for one GNN gene (gene-first mode).
 
@@ -421,6 +428,10 @@ def simulate_gene_cases(
                 model = _gene_model(
                     target, entity, profile_id, profiles, config, confounders, ontology, reporting
                 )
+                if presentation_ages is not None:
+                    model.presentation_age = presentation_ages.range_for(
+                        (entity.entity, *entity.profile_ids)
+                    )
                 models[(entity.entity, profile_id)] = model
             case, budget = _simulate_one_case(
                 model,
@@ -447,6 +458,7 @@ def simulate_gene_cases(
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
                         profile_version, source_versions, *budget,
+                        presentation_age=model.presentation_age,
                     ),
                     **case,
                 )
@@ -473,6 +485,14 @@ def _check_reporting(config: SimulationConfig, reporting: Reporting | None) -> N
             f"reporting.mode is {config.reporting.mode!r} but no report model was given; pass a "
             "report-model-v1 file, or set reporting.mode: observation for simulator 0.3 emission"
         )
+    if (
+        config.noise.related_max_ic is not None
+        and reporting is not None
+        and not reporting.scorer.has_information_content()
+    ):
+        raise ValueError(
+            "noise.related_max_ic needs a report model with an information_content feature"
+        )
 
 
 def _metadata(
@@ -485,6 +505,8 @@ def _metadata(
     source_versions: Mapping[str, str] | None,
     report_budget: int | None = None,
     report_budget_profile: int | None = None,
+    *,
+    presentation_age: tuple[float, float] | None = None,
 ) -> GeneratorMetadata:
     return GeneratorMetadata(
         generator_version=__version__,
@@ -497,6 +519,7 @@ def _metadata(
         sex_prior_key=sex_key,
         report_budget=report_budget,
         report_budget_profile=report_budget_profile,
+        presentation_age_years=presentation_age,
         difficulty=difficulty,
     )
 
@@ -539,7 +562,10 @@ def _disease_model(
                 ),
                 cardinal=is_cardinal,
                 report_weight=weight,
-                report_probability=min(1.0, weight / max(mean, REPORT_FREQUENCY_FLOOR)),
+                report_probability=min(
+                    1.0,
+                    config.reporting.q_scale * weight / max(mean, REPORT_FREQUENCY_FLOOR),
+                ),
             )
         )
     if confounders is None:
@@ -786,6 +812,12 @@ def _simulate_one_case(
             ontology, sex_terms, count=noise_slots,
             related_share=config.noise.related_share,
             true_ids=_true_profile_ids(observation),
+            related=config.noise,
+            information_content=(
+                reporting.scorer.information_content
+                if reporting is not None and config.noise.related_max_ic is not None
+                else None
+            ),
         )
         negatives = _sample_negatives(
             model, patient, observation.present_ids | {term.hpo_id for term in noise},
@@ -824,11 +856,16 @@ def _sample_patient(
     onset_category = _sample_onset_category(model.profile, config, rng)
     low, high = config.age.onset_years[onset_category]
     onset_age = rng.uniform(low, high)
-    duration_mean = config.age.duration_mean_by_onset.get(
-        onset_category, config.age.duration_mean_years
-    )
-    duration = min(rng.expovariate(1.0 / duration_mean), config.age.duration_max_years)
-    age = max(onset_age, min(onset_age + duration, config.age.max_age_years))
+    if model.presentation_age is not None:
+        age = max(
+            onset_age, min(rng.uniform(*model.presentation_age), config.age.max_age_years)
+        )
+    else:
+        duration_mean = config.age.duration_mean_by_onset.get(
+            onset_category, config.age.duration_mean_years
+        )
+        duration = min(rng.expovariate(1.0 / duration_mean), config.age.duration_max_years)
+        age = max(onset_age, min(onset_age + duration, config.age.max_age_years))
     boost = 0.0
     if model.profile.progression == "progressive" and config.progression.max_boost > 0.0:
         boost = config.progression.max_boost * (
@@ -1394,6 +1431,8 @@ def _sample_noise(
     count: int | None = None,
     related_share: float = 0.0,
     true_ids: Sequence[str] = (),
+    related: NoiseSettings | None = None,
+    information_content: Callable[[str], float] | None = None,
 ) -> list[CasePhenotype]:
     """Noise terms; ``count`` is drawn here unless the caller drew it already.
 
@@ -1413,12 +1452,13 @@ def _sample_noise(
     while len(noise) < count:
         if related_on and rng.random() < related_share:
             assert ontology is not None
-            related = _related_noise_term(
+            near = _related_noise_term(
                 model, true_ids, ontology, rng,
                 present_ids | {item.hpo_id for item in noise}, negated, sex_terms, patient.sex,
+                related or NoiseSettings(), information_content,
             )
-            if related is not None:
-                hpo_id, seed = related
+            if near is not None:
+                hpo_id, seed = near
                 pool = [term for term in pool if term.hpo_id != hpo_id]
                 noise.append(
                     CasePhenotype(
@@ -1457,13 +1497,17 @@ def _related_noise_term(
     negated: _RelatedTerms,
     sex_terms: SexSpecificTerms,
     sex: Sex,
+    settings: NoiseSettings,
+    information_content: Callable[[str], float] | None = None,
 ) -> tuple[str, str] | None:
     """A disease-related noise term and the true term it was drawn near.
 
     From a uniformly chosen true term, go up to a parent (uniform among
-    several) or, with probability 0.5, on to one of that parent's parents;
-    then pick uniformly among the ancestor's descendants at most 2 levels
-    down. The pick is never the ancestor, a term the profile annotates, an
+    several), then one more level with probability 0.5 per level, at most
+    ``related_up_levels`` levels (default 2: parent or grandparent); then pick
+    uniformly among the anchor's descendants at most ``related_down_levels``
+    levels down, skipping those above ``related_max_ic``. The pick is never the
+    anchor, a term the profile annotates, an
     ancestor or descendant of one (descendants are specialisation, not
     related noise), a shown term, a term related to a negative, or a term
     the patient's sex rules out. None when nothing qualifies.
@@ -1480,14 +1524,19 @@ def _related_noise_term(
     if not parents:
         return None
     anchor = parents[rng.randrange(len(parents))]
-    if rng.random() < 0.5:
+    for _ in range(settings.related_up_levels - 1):
+        if rng.random() >= 0.5:
+            break
         grandparents = ontology.get_direct_parents(anchor)
-        if grandparents:
-            anchor = grandparents[rng.randrange(len(grandparents))]
-    children = ontology.get_direct_children(anchor)
-    candidates = set(children)
-    for child in children:
-        candidates.update(ontology.get_direct_children(child))
+        if not grandparents:
+            break
+        anchor = grandparents[rng.randrange(len(grandparents))]
+    candidates: set[str] = set()
+    level = [anchor]
+    for _ in range(settings.related_down_levels):
+        level = [child for term in level for child in ontology.get_direct_children(term)]
+        candidates.update(level)
+    max_ic = settings.related_max_ic
     eligible = [
         hpo_id
         for hpo_id in sorted(candidates)
@@ -1498,6 +1547,7 @@ def _related_noise_term(
         and hpo_id not in shown
         and not negated.related(hpo_id)
         and sex_terms.allowed(hpo_id, None, sex)
+        and (max_ic is None or information_content is None or information_content(hpo_id) <= max_ic)
     ]
     if not eligible:
         return None

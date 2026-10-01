@@ -132,6 +132,11 @@ class GeneratorMetadata(StrictBaseModel):
         description="Report-model emission: the budget left for profile terms, "
         "max(1, k - noise terms drawn).",
     )
+    presentation_age_years: tuple[float, float] | None = Field(
+        default=None,
+        description="Presentation-age range [low, high] the case's age was drawn from "
+        "(presentation-ages file); unset when the onset-plus-duration rule set it.",
+    )
     difficulty: Difficulty
     generated_at: datetime | None = Field(
         default=None,
@@ -383,6 +388,11 @@ class ReportingSettings(StrictBaseModel):
         description="Probability that a reported, not generalized profile term is shown as a "
         "descendant: a child, then with probability 0.5 a grandchild (ADR-0011 amendment 3).",
     )
+    q_scale: float = Field(
+        default=1.0, gt=0.0,
+        description="Independent mode: q = min(1, q_scale * score / frequency); calibrated so "
+        "reported explained terms per case match real patients.",
+    )
 
     @model_validator(mode="after")
     def _check_noise_count(self) -> ReportingSettings:
@@ -404,6 +414,22 @@ class NoiseSettings(StrictBaseModel):
         description="Probability that a noise slot is a disease-related term (a descendant, "
         "at most 2 levels down, of a true term's parent or grandparent) rather than a "
         "vocabulary term (ADR-0011 amendment 3).",
+    )
+    related_up_levels: int = Field(
+        default=2, ge=1,
+        description="Related noise anchor: a true term's parent, then one more level up with "
+        "probability 0.5 per level, at most this many levels (2: parent or grandparent; "
+        "1: parent only).",
+    )
+    related_down_levels: int = Field(
+        default=2, ge=1,
+        description="Related noise candidates: the anchor's descendants at most this many "
+        "levels down (1: its children only).",
+    )
+    related_max_ic: float | None = Field(
+        default=None, ge=0.0,
+        description="Skip related-noise candidates whose information content (the report "
+        "model's information_content feature) is above this; null keeps all.",
     )
 
 

@@ -843,7 +843,11 @@ The accepted keys are generated from `SimulationConfig` (`rare-disease-simulator
 | `reporting.noise_count` | "poisson" / "budget_share" / "proportional" | `"poisson"` |
 | `reporting.noise_share` | float | `0.0` |
 | `reporting.specialize_rate` | float | `0.0` |
+| `reporting.q_scale` | float | `1.0` |
 | `noise.related_share` | float | `0.0` |
+| `noise.related_up_levels` | int | `2` |
+| `noise.related_down_levels` | int | `2` |
+| `noise.related_max_ic` | float or null | `null` |
 | `max_redraws` | int | `20` |
 | `noise.vocabulary_path` | path | `null` |
 
