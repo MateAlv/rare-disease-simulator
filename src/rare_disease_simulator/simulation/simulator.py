@@ -77,7 +77,7 @@ from rare_disease_simulator.profiles.schema import (
     SexRestriction,
 )
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
-from rare_disease_simulator.simulation.reporting import PresentationAges, Reporting
+from rare_disease_simulator.simulation.reporting import BudgetSampler, PresentationAges, Reporting
 from rare_disease_simulator.simulation.schema import (
     Age,
     CasePhenotype,
@@ -96,7 +96,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.5.1"
+SIMULATOR_VERSION = "0.5.2"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -267,6 +267,7 @@ class _Term:
     cardinal: bool = False
     report_weight: float = 1.0
     report_probability: float = 1.0
+    report_q_raw: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -338,6 +339,7 @@ def simulate_cases(
     """
 
     _check_reporting(config, reporting)
+    budget_sampler = _profile_budget(config)
     model = _disease_model(profile, config, confounders, reporting, (profile.disease_id,))
     if presentation_ages is not None:
         model.presentation_age = presentation_ages.range_for((profile.disease_id,))
@@ -349,7 +351,7 @@ def simulate_cases(
         for index in range(config.cases_per_disease_per_difficulty):
             seed = case_seed(config.seed, profile.disease_id, difficulty, index)
             rng = random.Random(seed)
-            case, budget = _simulate_one_case(
+            case, extras = _simulate_one_case(
                 model,
                 config=config,
                 preset=preset,
@@ -358,6 +360,7 @@ def simulate_cases(
                 noise_vocabulary=noise_vocabulary or (),
                 sex_terms=sex_terms,
                 reporting=reporting,
+                budget_sampler=budget_sampler,
             )
             cases.append(
                 SyntheticCase(
@@ -371,7 +374,7 @@ def simulate_cases(
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions, *budget,
+                        profile_version, source_versions, **extras,
                         presentation_age=model.presentation_age,
                     ),
                     **case,
@@ -406,6 +409,7 @@ def simulate_gene_cases(
     """
 
     _check_reporting(config, reporting)
+    budget_sampler = _profile_budget(config)
     sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
     cfg_hash = config_hash(config)
     models: dict[tuple[str, str], _DiseaseModel] = {}
@@ -433,7 +437,7 @@ def simulate_gene_cases(
                         (entity.entity, *entity.profile_ids)
                     )
                 models[(entity.entity, profile_id)] = model
-            case, budget = _simulate_one_case(
+            case, extras = _simulate_one_case(
                 model,
                 config=config,
                 preset=preset,
@@ -442,6 +446,7 @@ def simulate_gene_cases(
                 noise_vocabulary=noise_vocabulary or (),
                 sex_terms=sex_terms,
                 reporting=reporting,
+                budget_sampler=budget_sampler,
             )
             profile = model.profile
             cases.append(
@@ -457,7 +462,7 @@ def simulate_gene_cases(
                     ),
                     metadata=_metadata(
                         config, cfg_hash, difficulty, seed, model.sex_key,
-                        profile_version, source_versions, *budget,
+                        profile_version, source_versions, **extras,
                         presentation_age=model.presentation_age,
                     ),
                     **case,
@@ -477,6 +482,12 @@ def entity_profile(
         entity.entity, [profiles[profile_id] for profile_id in entity.profile_ids], ontology
     )
     return merged
+
+
+def _profile_budget(config: SimulationConfig) -> BudgetSampler | None:
+    if not config.reporting.budget_normalize:
+        return None
+    return BudgetSampler(config.reporting.profile_budget())
 
 
 def _check_reporting(config: SimulationConfig, reporting: Reporting | None) -> None:
@@ -507,6 +518,8 @@ def _metadata(
     report_budget_profile: int | None = None,
     *,
     presentation_age: tuple[float, float] | None = None,
+    report_count: int | None = None,
+    report_scale: float | None = None,
 ) -> GeneratorMetadata:
     return GeneratorMetadata(
         generator_version=__version__,
@@ -520,6 +533,8 @@ def _metadata(
         report_budget=report_budget,
         report_budget_profile=report_budget_profile,
         presentation_age_years=presentation_age,
+        report_count=report_count,
+        report_scale=report_scale,
         difficulty=difficulty,
     )
 
@@ -551,6 +566,7 @@ def _disease_model(
             if reporting is not None
             else 1.0
         )
+        q_raw = config.reporting.q_scale * weight / max(mean, REPORT_FREQUENCY_FLOOR)
         terms.append(
             _Term(
                 phenotype=phenotype,
@@ -562,10 +578,8 @@ def _disease_model(
                 ),
                 cardinal=is_cardinal,
                 report_weight=weight,
-                report_probability=min(
-                    1.0,
-                    config.reporting.q_scale * weight / max(mean, REPORT_FREQUENCY_FLOOR),
-                ),
+                report_probability=min(1.0, q_raw),
+                report_q_raw=q_raw,
             )
         )
     if confounders is None:
@@ -723,14 +737,16 @@ def _simulate_one_case(
     noise_vocabulary: Sequence[NoiseTerm],
     sex_terms: SexSpecificTerms,
     reporting: Reporting | None = None,
-) -> tuple[dict[str, object], tuple[int | None, int | None]]:
-    """One case's fields, and its report budgets ``(k, profile budget)`` (report mode)."""
+    budget_sampler: BudgetSampler | None = None,
+) -> tuple[dict[str, object], dict[str, int | float | None]]:
+    """One case's fields, and the reporting values its metadata records."""
 
     patient = _sample_patient(model, config, rng, sex_terms)
     observation: _Observation | None = None
     budget: int | None = None
     profile_budget: int | None = None
     noise_slots: int | None = None
+    extras: dict[str, int | float | None] = {}
     if config.reporting.mode == "report_model":
         assert reporting is not None
         truth: list[int] = []
@@ -768,14 +784,25 @@ def _simulate_one_case(
             if truth:
                 break
         if truth:
-            selected = {i for i in truth if rng.random() < model.terms[i].report_probability}
+            probabilities = {i: model.terms[i].report_probability for i in truth}
+            if budget_sampler is not None:
+                k = budget_sampler.draw(rng)
+                scaled, scale = budget_scaled_probabilities(
+                    [model.terms[i].report_q_raw for i in truth], min(k, len(truth))
+                )
+                probabilities = dict(zip(truth, scaled, strict=True))
+                extras = {"report_budget": k, "report_scale": round(scale, 6)}
+            selected = {i for i in truth if rng.random() < probabilities[i]}
             forced = None
             if not selected:
-                forced = max(truth, key=lambda i: (model.terms[i].report_probability, -i))
+                forced = max(truth, key=lambda i: (probabilities[i], -i))
                 selected = {forced}
+            if budget_sampler is not None:
+                extras["report_count"] = len(selected)
             observation = _report(
                 model, patient, truth, 0, False, preset, rng, ontology, sex_terms,
                 config.reporting.specialize_rate, selected=selected, forced=forced,
+                probabilities=probabilities,
             )
     else:
         for _ in range(config.max_redraws):
@@ -843,7 +870,9 @@ def _simulate_one_case(
         "unknown_phenotypes": observation.unknown,
         "noise_phenotypes": noise,
     }
-    return case, (budget, profile_budget)
+    if config.reporting.mode == "report_model":
+        extras = {"report_budget": budget, "report_budget_profile": profile_budget}
+    return case, extras
 
 
 def _sample_patient(
@@ -1006,6 +1035,7 @@ def _report(
     *,
     selected: set[int] | None = None,
     forced: int | None = None,
+    probabilities: Mapping[int, float] | None = None,
 ) -> _Observation:
     """Record ``budget`` of the true terms: cardinal ones first, the rest by report score.
 
@@ -1049,7 +1079,7 @@ def _report(
         term = model.terms[index]
         phenotype = term.phenotype
         probability = round(patient.probabilities[index], 4)
-        q = round(term.report_probability, 4) if independent else None
+        q = _recorded_probability(model, index, probabilities) if independent else None
         if index == forced:
             if phenotype.hpo_id in observed_ids:
                 return False
@@ -1132,7 +1162,7 @@ def _report(
         if phenotype.hpo_id in observed_ids:
             continue
         probability = round(patient.probabilities[index], 4)
-        q = round(model.terms[index].report_probability, 4) if independent else None
+        q = _recorded_probability(model, index, probabilities) if independent else None
         if rng.random() < preset.missing_vs_unknown_split:
             observation.missing.append(
                 _unobserved(
@@ -1148,6 +1178,49 @@ def _report(
                 )
             )
     return observation
+
+
+def _recorded_probability(
+    model: _DiseaseModel, index: int, probabilities: Mapping[int, float] | None
+) -> float:
+    """The probability a term's independent roll used, as recorded on the case."""
+
+    if probabilities is not None:
+        return round(probabilities[index], 4)
+    return round(model.terms[index].report_probability, 4)
+
+
+def budget_scaled_probabilities(q: Sequence[float], target: int) -> tuple[list[float], float]:
+    """Report probabilities ``min(1, c * q)`` whose sum is ``target``, and the factor ``c``.
+
+    ``c`` is found by bisection to within 1e-6 of ``target``. Terms with q = 0
+    stay at 0, so the target is cut to the number of terms with q > 0; when
+    every q is 0, the terms are treated as equally likely.
+    """
+
+    if not any(value > 0.0 for value in q):
+        q = [1.0] * len(q)
+    positive = [value for value in q if value > 0.0]
+    target = min(target, len(positive))
+
+    def total(c: float) -> float:
+        return sum(min(1.0, c * value) for value in q)
+
+    low, high = 0.0, 1.0 / min(positive)
+    if total(high) - target <= 1e-6:
+        scale = high
+    else:
+        scale = high
+        for _ in range(200):
+            scale = (low + high) / 2.0
+            reached = total(scale)
+            if abs(reached - target) <= 1e-6:
+                break
+            if reached < target:
+                low = scale
+            else:
+                high = scale
+    return [min(1.0, scale * value) for value in q], scale
 
 
 def _specialize(

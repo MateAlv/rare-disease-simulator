@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-01
+
+ANALYSIS-005 (`diagnostic.ar-training`): in independent mode, a record's length followed the profile's true-term count (Spearman 0.966 across genes vs 0.53 real), so genes with real patients averaged 14.3 simulated terms against 8.1 real. The default keeps 0.5.1 behaviour.
+
+### Added
+- `reporting.budget_normalize` with `reporting.profile_budget_histogram` (independent mode only): each case draws a budget `k`, finds by bisection the `c` with `Σ min(1, c · q_t) = min(k, true terms)` over the uncapped `q_t`, and rolls each true term independently with `min(1, c · q_t)`. Zero-q terms stay at 0; when every `q_t` is 0 the terms are equally likely. Cases record `report_budget`, `report_count` and `report_scale`, and true terms record their effective probability.
+- `validate` and the run summary: realized profile terms per case against `k` (means, total variation), mean `c`; the q calibration and capped share use the effective probabilities.
+- `tests/fixtures/v04/golden_0.5.1.jsonl.gz`: cases written by the 0.5.1 code, which the defaults must reproduce.
+
+### Changed
+- `SIMULATOR_VERSION` 0.5.2.
+
 ## [0.5.1] - 2026-10-01
 
 Candidate 4 (`diagnostic.ar-training` PR #44) reported only 17–19% of true terms in independent mode, drew related noise more specific than real terms, and kept ages far below real ones. Every new knob defaults to 0.5.0 behaviour.

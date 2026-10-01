@@ -1,6 +1,10 @@
+from rare_disease_simulator.simulation.reporting import load_presentation_ages
 from tests.v04_golden import (
+    GOLDEN_051,
     GOLDEN_INDEPENDENT,
     INDEPENDENT_SCENARIOS,
+    PRESENTATION_AGES,
+    SCENARIOS_051,
     golden_file_lines,
     golden_lines,
 )
@@ -38,3 +42,9 @@ def test_v051_knobs_at_their_defaults_reproduce_older_cases() -> None:
 
     assert golden_lines(INDEPENDENT_SCENARIOS, **knobs) == golden_file_lines(GOLDEN_INDEPENDENT)
     assert golden_lines(**knobs) == golden_file_lines()
+
+
+def test_defaults_reproduce_simulator_051_cases() -> None:
+    ages = load_presentation_ages(PRESENTATION_AGES)
+
+    assert golden_lines(SCENARIOS_051, ages) == golden_file_lines(GOLDEN_051)

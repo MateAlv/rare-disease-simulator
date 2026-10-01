@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.5.1"
+    assert summary["simulate"]["simulator_version"] == "0.5.2"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.5.1-")
+    assert card["dataset_id"].startswith("ds-sim0.5.2-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"
@@ -290,3 +290,41 @@ def test_v051_presentation_ages_and_q_scale_are_recorded(v04_run, tmp_path: Path
     card = json.loads((tmp_path / "ds.card.json").read_text("utf-8"))
     assert card["inputs"]["presentation_ages"]["sha256"] == sha256_file(ages)
     assert card["validate"]["age"]["presentation_age_cases"] == len(listed)
+
+
+def test_v052_budget_normalized_run_records_k_and_realized_counts(
+    v04_run, tmp_path: Path
+) -> None:
+    _, profiles, _ = v04_run
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({
+        "frequency.shrinkage_mean": 0.4,
+        "reporting.mode": "independent",
+        "reporting.force_cardinal": False,
+        "reporting.budget_normalize": True,
+        "reporting.profile_budget_histogram": {"0": 2, "1": 5, "2": 3},
+    }), encoding="utf-8")
+    cases_path = tmp_path / "cases.jsonl"
+
+    result = _invoke(
+        "simulate", "--profiles", str(profiles), "--output", str(cases_path), *GENE_OPTIONS,
+        "--genes", "all", "--cases-per-gene", "40", "--difficulty", "medium",
+        "--calibration", str(calibration), *NOISE,
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "cases.summary.json").read_text("utf-8"))
+    cases = read_model_jsonl(cases_path, SyntheticCase)
+    normalized = summary["reporting"]["budget_normalized"]
+    assert normalized["cases"] == len(cases)
+    assert normalized["k_mean"] == round(
+        sum(c.metadata.report_budget for c in cases) / len(cases), 4
+    )
+    assert {"realized_profile_mean", "total_variation_k_vs_realized", "scale_mean"} <= set(
+        normalized
+    )
+    assert all(c.metadata.report_budget in {1, 2} and c.metadata.report_scale is not None
+               for c in cases)
+    checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
+    assert checked.exit_code == 0, checked.output
+    assert "budget-normalized" in checked.output

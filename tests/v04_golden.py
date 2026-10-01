@@ -1,12 +1,14 @@
 """Cases used to check that new knobs left at their defaults reproduce older output.
 
 ``tests/fixtures/v04/golden_0.4.1.jsonl.gz`` was written by this module with the
-0.4.1 code (b645c60), and ``golden_0.5.0_independent.jsonl.gz`` (independent
+0.4.1 code (b645c60); ``golden_0.5.0_independent.jsonl.gz`` (independent
 reporting, proportional and related noise, per-onset durations) with the 0.5.0
-code (020e41d). Each line is a case without the fields that name the
-simulator build (``simulator_version``, ``config_hash``). Lines are compared
-without null fields, as ``write_jsonl`` writes cases, so a new optional field
-left unset keeps the comparison byte-for-byte meaningful.
+code (020e41d); and ``golden_0.5.1.jsonl.gz`` (q_scale, one-level related noise
+under an IC cap, presentation ages) with the 0.5.1 code (09e5802). Each line is
+a case without the fields that name the simulator build (``simulator_version``,
+``config_hash``). Lines are compared without null fields, as ``write_jsonl``
+writes cases, so a new optional field left unset keeps the comparison
+byte-for-byte meaningful.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from tests.test_v04_simulation import CARDINAL
 
 GOLDEN = fixture_path("v04") / "golden_0.4.1.jsonl.gz"
 GOLDEN_INDEPENDENT = fixture_path("v04") / "golden_0.5.0_independent.jsonl.gz"
+GOLDEN_051 = fixture_path("v04") / "golden_0.5.1.jsonl.gz"
+PRESENTATION_AGES = fixture_path("v05") / "presentation_ages.tsv"
 NOISE = [
     NoiseTerm(hpo_id, TERMS[hpo_id][0])
     for hpo_id in ("HP:0000964", "HP:0000988", "HP:0000008", "HP:0000028", "HP:0000505")
@@ -43,9 +47,19 @@ INDEPENDENT_SCENARIOS = {
         "age": {"duration_mean_by_onset": {"infantile": 9.8}},
     },
 }
+SCENARIOS_051 = {
+    "independent_051": {
+        "reporting": {"mode": "independent", "noise_count": "proportional", "noise_share": 0.24,
+                      "specialize_rate": 0.3, "q_scale": 1.5},
+        "noise": {"related_share": 0.5, "related_up_levels": 1, "related_down_levels": 1,
+                  "related_max_ic": 3.5},
+    },
+}
 
 
-def golden_lines(scenarios: dict | None = None, **extra: dict) -> list[str]:
+def golden_lines(
+    scenarios: dict | None = None, presentation_ages: object = None, **extra: dict
+) -> list[str]:
     ontology = build_ontology()
     reporting = Reporting.build(
         load_report_model(fixture_path("v04") / "report_model.json"),
@@ -64,6 +78,7 @@ def golden_lines(scenarios: dict | None = None, **extra: dict) -> list[str]:
         for case in simulate_gene_cases(
             TARGET, PROFILE_MAP, config, ontology=ontology, confounders=index,
             noise_vocabulary=NOISE, reporting=reporting,
+            **({"presentation_ages": presentation_ages} if presentation_ages else {}),
         ):
             data = json.loads(case.model_dump_json(exclude_none=True))
             del data["metadata"]["simulator_version"], data["metadata"]["config_hash"]
@@ -95,5 +110,9 @@ if __name__ == "__main__":
 
     if sys.argv[1:] == ["independent"]:
         _write(GOLDEN_INDEPENDENT, golden_lines(INDEPENDENT_SCENARIOS))
+    elif sys.argv[1:] == ["0.5.1"]:
+        from rare_disease_simulator.simulation.reporting import load_presentation_ages
+
+        _write(GOLDEN_051, golden_lines(SCENARIOS_051, load_presentation_ages(PRESENTATION_AGES)))
     else:
         _write(GOLDEN, golden_lines())
