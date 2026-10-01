@@ -768,7 +768,12 @@ def simulate(
         )
 
     output_path = output or config.exports.rich_cases_path
-    realized = _ReportedTotals(sim_config.reporting.mode)
+    realized = _ReportedTotals(
+        sim_config.reporting.mode,
+        sim_config.reporting.profile_budget()
+        if sim_config.reporting.budget_normalize
+        else None,
+    )
     written = write_jsonl(output_path, realized.track(cases))
     run_summary: dict[str, object] = {
         "simulate": {
@@ -839,8 +844,12 @@ def simulate(
 class _ReportedTotals:
     """Realized report budgets and reported terms of the cases as they are written."""
 
-    def __init__(self, mode: str = "report_model") -> None:
+    def __init__(self, mode: str = "report_model", histogram: dict[int, int] | None = None) -> None:
         self.mode = mode
+        positive = {k: n for k, n in (histogram or {}).items() if k >= 1 and n > 0}
+        total = sum(positive.values())
+        self.histogram = {k: n / total for k, n in positive.items()} if total else None
+        self.total_counts: Counter[int] = Counter()
         self.counts: Counter[str] = Counter()
         self.q_sum = 0.0
         self.k_counts: Counter[int] = Counter()
@@ -887,6 +896,10 @@ class _ReportedTotals:
             self.k_counts[case.metadata.report_budget] += 1
             self.realized_counts[len(shown) + len(merged)] += 1
             self.scale_sum += case.metadata.report_scale or 0.0
+            if case.metadata.report_budget_profile is not None:
+                self.counts["record_cases"] += 1
+                self.counts["profile_target"] += case.metadata.report_budget_profile
+                self.total_counts[len(shown) + len(merged) + len(case.noise_phenotypes)] += 1
 
     def summary(self) -> dict[str, object]:
         cases = self.counts["cases"]
@@ -950,6 +963,29 @@ class _ReportedTotals:
             ),
             "total_variation_k_vs_realized": round(variation, 4),
             "scale_mean": round(self.scale_sum / cases, 4),
+            "record": self._record_summary(cases),
+        }
+
+    def _record_summary(self, cases: int) -> dict[str, object] | None:
+        record_cases = self.counts["record_cases"]
+        if not record_cases:
+            return None
+        totals = {k: n / record_cases for k, n in self.total_counts.items()}
+        reference = self.histogram or {}
+        variation = 0.5 * sum(
+            abs(totals.get(k, 0.0) - reference.get(k, 0.0)) for k in set(totals) | set(reference)
+        )
+        return {
+            "k_mean": round(sum(k * n for k, n in self.k_counts.items()) / cases, 4),
+            "noise_mean": round(self.counts["noise"] / record_cases, 4),
+            "profile_target_mean": round(self.counts["profile_target"] / record_cases, 4),
+            "realized_profile_mean": round(
+                sum(k * n for k, n in self.realized_counts.items()) / cases, 4
+            ),
+            "total_shown_mean": round(
+                sum(k * n for k, n in self.total_counts.items()) / record_cases, 4
+            ),
+            "total_variation_total_vs_histogram": round(variation, 4),
         }
 
     def noise_summary(self) -> dict[str, object]:

@@ -1,14 +1,19 @@
 """Cases used to check that new knobs left at their defaults reproduce older output.
 
-``tests/fixtures/v04/golden_0.4.1.jsonl.gz`` was written by this module with the
-0.4.1 code (b645c60); ``golden_0.5.0_independent.jsonl.gz`` (independent
-reporting, proportional and related noise, per-onset durations) with the 0.5.0
-code (020e41d); and ``golden_0.5.1.jsonl.gz`` (q_scale, one-level related noise
-under an IC cap, presentation ages) with the 0.5.1 code (09e5802). Each line is
-a case without the fields that name the simulator build (``simulator_version``,
-``config_hash``). Lines are compared without null fields, as ``write_jsonl``
-writes cases, so a new optional field left unset keeps the comparison
-byte-for-byte meaningful.
+Each golden file was written by this module with the code of the version it
+names, in a throwaway worktree:
+
+- ``golden_0.4.1.jsonl.gz`` (b645c60): report-model mode;
+- ``golden_0.5.0_independent.jsonl.gz`` (020e41d): independent reporting,
+  proportional and related noise, per-onset durations;
+- ``golden_0.5.1.jsonl.gz`` (09e5802): q_scale, one-level related noise under
+  an IC cap, presentation ages;
+- ``golden_0.5.2.jsonl.gz`` (40f8896): budget-normalized independent reporting.
+
+Each line is a case without the fields that name the simulator build
+(``simulator_version``, ``config_hash``). Lines are compared without null
+fields, as ``write_jsonl`` writes cases, so a new optional field left unset
+keeps the comparison byte-for-byte meaningful.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from tests.test_v04_simulation import CARDINAL
 GOLDEN = fixture_path("v04") / "golden_0.4.1.jsonl.gz"
 GOLDEN_INDEPENDENT = fixture_path("v04") / "golden_0.5.0_independent.jsonl.gz"
 GOLDEN_051 = fixture_path("v04") / "golden_0.5.1.jsonl.gz"
+GOLDEN_052 = fixture_path("v04") / "golden_0.5.2.jsonl.gz"
 PRESENTATION_AGES = fixture_path("v05") / "presentation_ages.tsv"
 NOISE = [
     NoiseTerm(hpo_id, TERMS[hpo_id][0])
@@ -53,6 +59,14 @@ SCENARIOS_051 = {
                       "specialize_rate": 0.3, "q_scale": 1.5},
         "noise": {"related_share": 0.5, "related_up_levels": 1, "related_down_levels": 1,
                   "related_max_ic": 3.5},
+    },
+}
+SCENARIOS_052 = {
+    "budget_normalized_052": {
+        "reporting": {"mode": "independent", "noise_count": "proportional", "noise_share": 0.24,
+                      "specialize_rate": 0.3, "q_scale": 1.5, "budget_normalize": True,
+                      "profile_budget_histogram": {"0": 2, "1": 3, "2": 5, "3": 4, "4": 2}},
+        "noise": {"related_share": 0.5},
     },
 }
 
@@ -110,6 +124,8 @@ if __name__ == "__main__":
 
     if sys.argv[1:] == ["independent"]:
         _write(GOLDEN_INDEPENDENT, golden_lines(INDEPENDENT_SCENARIOS))
+    elif sys.argv[1:] == ["0.5.2"]:
+        _write(GOLDEN_052, golden_lines(SCENARIOS_052))
     elif sys.argv[1:] == ["0.5.1"]:
         from rare_disease_simulator.simulation.reporting import load_presentation_ages
 

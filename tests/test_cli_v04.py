@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.5.2"
+    assert summary["simulate"]["simulator_version"] == "0.5.3"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.5.2-")
+    assert card["dataset_id"].startswith("ds-sim0.5.3-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"
@@ -328,3 +328,41 @@ def test_v052_budget_normalized_run_records_k_and_realized_counts(
     checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
     assert checked.exit_code == 0, checked.output
     assert "budget-normalized" in checked.output
+
+
+def test_v053_record_scope_run_records_totals(v04_run, tmp_path: Path) -> None:
+    _, profiles, _ = v04_run
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({
+        "frequency.shrinkage_mean": 0.4,
+        "reporting.mode": "independent",
+        "reporting.force_cardinal": False,
+        "reporting.budget_normalize": True,
+        "reporting.budget_scope": "record",
+        "reporting.profile_budget_histogram": {"0": 2, "2": 5, "3": 3},
+        "reporting.noise_count": "budget_share",
+        "reporting.noise_share": 0.3,
+    }), encoding="utf-8")
+    cases_path = tmp_path / "cases.jsonl"
+
+    result = _invoke(
+        "simulate", "--profiles", str(profiles), "--output", str(cases_path), *GENE_OPTIONS,
+        "--genes", "all", "--cases-per-gene", "40", "--difficulty", "medium",
+        "--calibration", str(calibration), *NOISE,
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "cases.summary.json").read_text("utf-8"))
+    cases = read_model_jsonl(cases_path, SyntheticCase)
+    record = summary["reporting"]["budget_normalized"]["record"]
+    assert record["noise_mean"] == round(
+        sum(len(c.noise_phenotypes) for c in cases) / len(cases), 4
+    )
+    assert record["profile_target_mean"] == round(
+        sum(c.metadata.report_budget_profile for c in cases) / len(cases), 4
+    )
+    assert {"k_mean", "realized_profile_mean", "total_shown_mean",
+            "total_variation_total_vs_histogram"} <= set(record)
+    checked = _invoke("validate", "--cases", str(cases_path), "--profiles", str(profiles))
+    assert checked.exit_code == 0, checked.output
+    assert "record scope" in checked.output

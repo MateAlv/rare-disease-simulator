@@ -411,17 +411,31 @@ class ReportingSettings(StrictBaseModel):
         "profile_budget_histogram and scale every true term's q by one factor c so the "
         "expected reported count is min(k, true terms); terms are still rolled independently.",
     )
+    budget_scope: Literal["profile", "record"] = Field(
+        default="profile",
+        description="What the budget k counts with budget_normalize: 'profile' the reported "
+        "profile terms, noise added on top (0.5.2); 'record' every present term, so noise "
+        "(noise_count 'budget_share') takes n of the k slots and profile terms aim at k - n.",
+    )
     profile_budget_histogram: dict[str, int] | None = Field(
         default=None,
-        description="Reported profile terms per real case, {str(k): count}; required by "
-        "budget_normalize. The 0 bin is ignored and the rest renormalised.",
+        description="Present terms per real case, {str(k): count}: profile terms with "
+        "budget_scope 'profile', all present terms with 'record' (report-model-v2's "
+        "term_budget); required by budget_normalize. The 0 bin is ignored and the rest "
+        "renormalised.",
     )
 
     @model_validator(mode="after")
     def _check_noise_count(self) -> ReportingSettings:
-        if self.mode == "independent" and self.noise_count == "budget_share":
-            raise ValueError("noise_count 'budget_share' needs a budget: use 'proportional' "
-                             "or 'poisson' in independent mode")
+        record = self.budget_scope == "record"
+        if record and not (self.mode == "independent" and self.budget_normalize):
+            raise ValueError("budget_scope 'record' needs independent mode with budget_normalize")
+        if record and self.noise_count != "budget_share":
+            raise ValueError("budget_scope 'record' takes noise from the budget: use noise_count "
+                             "'budget_share'")
+        if self.mode == "independent" and self.noise_count == "budget_share" and not record:
+            raise ValueError("noise_count 'budget_share' needs a budget: in independent mode use "
+                             "budget_scope 'record', or 'proportional' or 'poisson'")
         if self.mode == "report_model" and self.noise_count == "proportional":
             raise ValueError("noise_count 'proportional' is for independent mode")
         if self.noise_count == "proportional" and self.noise_share >= 1.0:
