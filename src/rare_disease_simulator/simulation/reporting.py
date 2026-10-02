@@ -474,35 +474,66 @@ class PresentationAges:
     def range_for(self, disease_ids: Iterable[str]) -> tuple[float, float] | None:
         """The first listed id's range (the entity, then its profile ids), else None."""
 
-        for disease_id in disease_ids:
-            found = self.ranges.get(disease_id)
-            if found is not None:
-                return found
-        return None
+        return _first_range(self.ranges, disease_ids)
+
+
+@dataclass(frozen=True)
+class OnsetAges:
+    """``onset-ages``: an age-at-onset range per disease id."""
+
+    ranges: Mapping[str, tuple[float, float]]
+
+    def range_for(self, disease_ids: Iterable[str]) -> tuple[float, float] | None:
+        """The first listed id's range (the entity, then its profile ids), else None."""
+
+        return _first_range(self.ranges, disease_ids)
+
+
+def _first_range(
+    ranges: Mapping[str, tuple[float, float]], disease_ids: Iterable[str]
+) -> tuple[float, float] | None:
+    for disease_id in disease_ids:
+        found = ranges.get(disease_id)
+        if found is not None:
+            return found
+    return None
 
 
 PRESENTATION_AGE_COLUMNS = ("disease_id", "age_low_years", "age_high_years", "source")
+ONSET_AGE_COLUMNS = PRESENTATION_AGE_COLUMNS
 
 
 def load_presentation_ages(path: Path | str) -> PresentationAges:
     """Read a presentation-ages TSV; a wrong header, id, range or duplicate is an error."""
 
+    return PresentationAges(ranges=_load_age_ranges(path, PRESENTATION_AGE_COLUMNS))
+
+
+def load_onset_ages(path: Path | str) -> OnsetAges:
+    """Read an onset-ages TSV; a wrong header, id, range or duplicate is an error."""
+
+    return OnsetAges(ranges=_load_age_ranges(path, ONSET_AGE_COLUMNS))
+
+
+def _load_age_ranges(
+    path: Path | str, columns: tuple[str, ...]
+) -> dict[str, tuple[float, float]]:
     ages_path = Path(path)
     ranges: dict[str, tuple[float, float]] = {}
     with ages_path.open(encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader, None)
-        if header is None or tuple(header) != PRESENTATION_AGE_COLUMNS:
+        if header is None or tuple(header) != columns:
             raise ReportingArtifactError(
-                f"{ages_path}: header must be {list(PRESENTATION_AGE_COLUMNS)} "
+                f"{ages_path}: header must be {list(columns)} "
                 f"(tab-separated), got {header!r}"
             )
         for line_number, row in enumerate(reader, start=2):
             if not row or not any(row):
                 continue
             where = f"{ages_path}:{line_number}"
-            if len(row) != len(PRESENTATION_AGE_COLUMNS):
-                raise ReportingArtifactError(f"{where}: expected 4 columns")
+            if len(row) != len(columns):
+                raise ReportingArtifactError(f"{where}: expected {len(columns)} columns")
             disease_id, low_text, high_text, source = row
             if not _DISEASE_ID_RE.match(disease_id):
                 raise ReportingArtifactError(f"{where}: bad disease id {disease_id!r}")
@@ -517,7 +548,7 @@ def load_presentation_ages(path: Path | str) -> PresentationAges:
             if disease_id in ranges:
                 raise ReportingArtifactError(f"{where}: duplicate disease id {disease_id}")
             ranges[disease_id] = (low, high)
-    return PresentationAges(ranges=dict(sorted(ranges.items())))
+    return dict(sorted(ranges.items()))
 
 
 def _profile_information_content(

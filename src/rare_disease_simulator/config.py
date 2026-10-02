@@ -50,6 +50,8 @@ class SourcePathsConfig(BaseModel):
     cardinal_sha256: str | None = None
     presentation_ages_path: Path | None = None
     presentation_ages_sha256: str | None = None
+    onset_ages_path: Path | None = None
+    onset_ages_sha256: str | None = None
     negative_phenotype_annotation_path: Path = Path(
         "data/raw/hpo/negative_phenotype_annotation.tab"
     )

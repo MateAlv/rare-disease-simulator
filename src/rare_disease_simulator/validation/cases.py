@@ -114,6 +114,7 @@ class _Accumulator:
     record_totals: Counter[int] = field(default_factory=Counter)
     record_counts: Counter[str] = field(default_factory=Counter)
     presentation_age_cases: int = 0
+    onset_age_cases: int = 0
     independent: Counter[str] = field(default_factory=Counter)
     cardinal: Counter[str] = field(default_factory=Counter)
     violations: Counter[str] = field(default_factory=Counter)
@@ -192,6 +193,7 @@ def validate_cases(
         "age": {
             **_age_report(acc.ages, acc.cases),
             "presentation_age_cases": acc.presentation_age_cases,
+            "onset_age_cases": acc.onset_age_cases,
         },
         "onset": {
             **_age_report(acc.onsets, acc.cases),
@@ -572,6 +574,11 @@ def _check_case(
         acc.presentation_age_cases += 1
         if patient.age is not None:
             _check_presentation_age(acc, case, age_range, config)
+    onset_range = case.metadata.onset_age_years
+    if case.metadata.onset_age_source == "literature":
+        acc.onset_age_cases += 1
+        if onset_range is not None and patient.age_of_onset is not None:
+            _check_onset_age(acc, case, onset_range)
     if (
         patient.age is not None
         and patient.age_of_onset is not None
@@ -660,6 +667,16 @@ def _check_presentation_age(
         acc.violation(
             "presentation_age_out_of_range", case.case_id, f"{age} not in [{low}, {high}]"
         )
+
+
+def _check_onset_age(
+    acc: _Accumulator, case: SyntheticCase, onset_range: tuple[float, float]
+) -> None:
+    assert case.patient.age_of_onset is not None
+    onset = case.patient.age_of_onset.value
+    low, high = onset_range
+    if onset < low - AGE_ROUNDING or onset > high + AGE_ROUNDING:
+        acc.violation("onset_age_out_of_range", case.case_id, f"{onset} not in [{low}, {high}]")
 
 
 def _truly_present(case: SyntheticCase) -> set[str]:

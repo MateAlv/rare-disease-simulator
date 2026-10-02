@@ -77,7 +77,12 @@ from rare_disease_simulator.profiles.schema import (
     SexRestriction,
 )
 from rare_disease_simulator.simulation.confounders import ConfounderIndex
-from rare_disease_simulator.simulation.reporting import BudgetSampler, PresentationAges, Reporting
+from rare_disease_simulator.simulation.reporting import (
+    BudgetSampler,
+    OnsetAges,
+    PresentationAges,
+    Reporting,
+)
 from rare_disease_simulator.simulation.schema import (
     Age,
     CasePhenotype,
@@ -88,6 +93,7 @@ from rare_disease_simulator.simulation.schema import (
     GeneratorMetadata,
     NegativeSource,
     NoiseSettings,
+    OnsetAgeSource,
     PatientAttributes,
     Sex,
     SexPriorKey,
@@ -96,7 +102,7 @@ from rare_disease_simulator.simulation.schema import (
     SyntheticCase,
 )
 
-SIMULATOR_VERSION = "0.5.3"
+SIMULATOR_VERSION = "0.5.4"
 
 CARDINAL_ROLES = {"cardinal", "major"}
 CONGENITAL_ONSET = "HP:0003577"
@@ -294,6 +300,8 @@ class _DiseaseModel:
     profile_ids: tuple[str, ...] | None = None
     annotated_closure: frozenset[str] | None = None
     presentation_age: tuple[float, float] | None = None
+    onset_age_range: tuple[float, float] | None = None
+    onset_age_source: OnsetAgeSource | None = None
 
 
 @dataclass
@@ -328,6 +336,7 @@ def simulate_cases(
     sex_terms: SexSpecificTerms | None = None,
     reporting: Reporting | None = None,
     presentation_ages: PresentationAges | None = None,
+    onset_ages: OnsetAges | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for a single disease profile.
 
@@ -343,6 +352,7 @@ def simulate_cases(
     model = _disease_model(profile, config, confounders, reporting, (profile.disease_id,))
     if presentation_ages is not None:
         model.presentation_age = presentation_ages.range_for((profile.disease_id,))
+    _set_onset_ages(model, onset_ages, (profile.disease_id,))
     sex_terms = sex_terms or SexSpecificTerms(ontology, config.sex)
     cfg_hash = config_hash(config)
     cases: list[SyntheticCase] = []
@@ -376,6 +386,8 @@ def simulate_cases(
                         config, cfg_hash, difficulty, seed, model.sex_key,
                         profile_version, source_versions, **extras,
                         presentation_age=model.presentation_age,
+                        onset_age_range=model.onset_age_range,
+                        onset_age_source=model.onset_age_source,
                     ),
                     **case,
                 )
@@ -396,6 +408,7 @@ def simulate_gene_cases(
     sex_terms: SexSpecificTerms | None = None,
     reporting: Reporting | None = None,
     presentation_ages: PresentationAges | None = None,
+    onset_ages: OnsetAges | None = None,
 ) -> list[SyntheticCase]:
     """Simulate all configured cases for one GNN gene (gene-first mode).
 
@@ -436,6 +449,7 @@ def simulate_gene_cases(
                     model.presentation_age = presentation_ages.range_for(
                         (entity.entity, *entity.profile_ids)
                     )
+                _set_onset_ages(model, onset_ages, (entity.entity, *entity.profile_ids))
                 models[(entity.entity, profile_id)] = model
             case, extras = _simulate_one_case(
                 model,
@@ -464,6 +478,8 @@ def simulate_gene_cases(
                         config, cfg_hash, difficulty, seed, model.sex_key,
                         profile_version, source_versions, **extras,
                         presentation_age=model.presentation_age,
+                        onset_age_range=model.onset_age_range,
+                        onset_age_source=model.onset_age_source,
                     ),
                     **case,
                 )
@@ -518,6 +534,8 @@ def _metadata(
     report_budget_profile: int | None = None,
     *,
     presentation_age: tuple[float, float] | None = None,
+    onset_age_range: tuple[float, float] | None = None,
+    onset_age_source: OnsetAgeSource | None = None,
     report_count: int | None = None,
     report_scale: float | None = None,
 ) -> GeneratorMetadata:
@@ -533,6 +551,8 @@ def _metadata(
         report_budget=report_budget,
         report_budget_profile=report_budget_profile,
         presentation_age_years=presentation_age,
+        onset_age_years=onset_age_range,
+        onset_age_source=onset_age_source,
         report_count=report_count,
         report_scale=report_scale,
         difficulty=difficulty,
@@ -900,9 +920,13 @@ def _sample_patient(
     sex_terms: SexSpecificTerms,
 ) -> _Patient:
     sex: Sex = "male" if rng.random() < config.sex.p_male[model.sex_key] else "female"
-    onset_category = _sample_onset_category(model.profile, config, rng)
-    low, high = config.age.onset_years[onset_category]
-    onset_age = rng.uniform(low, high)
+    if model.onset_age_range is not None:
+        onset_age = rng.uniform(*model.onset_age_range)
+        onset_category = _category_for_onset_age(onset_age, config.age.onset_years)
+    else:
+        onset_category = _sample_onset_category(model.profile, config, rng)
+        low, high = config.age.onset_years[onset_category]
+        onset_age = rng.uniform(low, high)
     if model.presentation_age is not None:
         age = max(
             onset_age, min(rng.uniform(*model.presentation_age), config.age.max_age_years)
@@ -932,6 +956,28 @@ def _sample_patient(
         )
         probabilities.append(probability)
     return _Patient(sex, onset_category, onset_age, age, eligible, probabilities)
+
+
+def _set_onset_ages(
+    model: _DiseaseModel, onset_ages: OnsetAges | None, disease_ids: Sequence[str]
+) -> None:
+    if onset_ages is None:
+        return
+    model.onset_age_range = onset_ages.range_for(disease_ids)
+    model.onset_age_source = "literature" if model.onset_age_range is not None else "category"
+
+
+def _category_for_onset_age(
+    onset_age: float, windows: Mapping[OnsetCategory, tuple[float, float]]
+) -> OnsetCategory:
+    """The category whose window holds the age (the narrowest on ties, else the nearest)."""
+
+    def distance(window: tuple[float, float]) -> float:
+        return max(window[0] - onset_age, onset_age - window[1], 0.0)
+
+    return min(
+        windows, key=lambda c: (distance(windows[c]), windows[c][1] - windows[c][0])
+    )
 
 
 def _sample_onset_category(

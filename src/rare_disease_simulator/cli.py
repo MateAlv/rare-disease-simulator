@@ -64,11 +64,13 @@ from rare_disease_simulator.simulation.confounders import ConfounderIndex
 from rare_disease_simulator.simulation.inputs import load_label_maps, load_noise_vocabulary
 from rare_disease_simulator.simulation.reporting import (
     CardinalIndex,
+    OnsetAges,
     PresentationAges,
     Reporting,
     ReportingArtifactError,
     ReportModel,
     load_cardinal,
+    load_onset_ages,
     load_presentation_ages,
     load_report_model,
 )
@@ -610,6 +612,16 @@ def simulate(
             dir_okay=False,
         ),
     ] = None,
+    onset_ages: Annotated[
+        Path | None,
+        typer.Option(
+            "--onset-ages",
+            help="TSV (disease_id, age_low_years, age_high_years, source) of age-at-onset "
+            "ranges; a listed disease draws its onset age from it instead of the onset "
+            "category window (default: sources.onset_ages_path).",
+            dir_okay=False,
+        ),
+    ] = None,
     difficulty: Annotated[
         list[str] | None,
         typer.Option("--difficulty", help="Override the difficulties (repeatable)."),
@@ -699,6 +711,8 @@ def simulate(
     )
     ages, ages_inputs = _load_presentation_ages(config, presentation_ages)
     reporting_inputs.update(ages_inputs)
+    onsets, onsets_inputs = _load_onset_ages(config, onset_ages)
+    reporting_inputs.update(onsets_inputs)
     confounders = ConfounderIndex(
         profile_records,
         ontology,
@@ -747,6 +761,7 @@ def simulate(
         "source_versions": source_versions,
         "reporting": reporting,
         "presentation_ages": ages,
+        "onset_ages": onsets,
     }
     if plan is not None:
         cases: Iterable[SyntheticCase] = (
@@ -811,6 +826,11 @@ def simulate(
             if ages is not None
             else None
         ),
+        "onset_ages": (
+            {"diseases": len(onsets.ranges), "cases": realized.counts["onset_age_cases"]}
+            if onsets is not None
+            else None
+        ),
         "output": {
             "cases_path": str(output_path),
             "cases_written": written,
@@ -860,6 +880,8 @@ class _ReportedTotals:
         for case in cases:
             if case.metadata.presentation_age_years is not None:
                 self.counts["presentation_age_cases"] += 1
+            if case.metadata.onset_age_source == "literature":
+                self.counts["onset_age_cases"] += 1
             if case.metadata.report_budget is not None or self.mode == "independent":
                 self.counts["cases"] += 1
                 self.counts["budget"] += case.metadata.report_budget or 0
@@ -1124,6 +1146,25 @@ def _load_presentation_ages(
     except ReportingArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     return ages, {"presentation_ages": record}
+
+
+def _load_onset_ages(
+    config: AppConfig, given: Path | None
+) -> tuple[OnsetAges | None, dict[str, dict[str, object] | None]]:
+    path = given or config.sources.onset_ages_path
+    if path is None:
+        return None, {}
+    record = _pinned_record(
+        _required_file(path, "onset ages"),
+        config.sources.onset_ages_sha256,
+        given is None,
+        "sources.onset_ages_sha256",
+    )
+    try:
+        ages = load_onset_ages(path)
+    except ReportingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return ages, {"onset_ages": record}
 
 
 def _merge_summary(
