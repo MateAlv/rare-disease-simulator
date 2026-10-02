@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-02
+
+ADR-0013 amendment 4 (`diagnostic.ar-training`): literature age at onset per disease. Without the file, output is byte-identical to 0.5.3.
+
+### Added
+- `--onset-ages` / `sources.onset_ages_path` (optional `sources.onset_ages_sha256` pin): a TSV with header `disease_id`, `age_low_years`, `age_high_years`, `source`, loaded with the presentation-ages rules (a bad header, id, range or a duplicate id fails at load). The entity id is looked up first, then each profile id in order. A matching case draws its onset age uniformly in `[low, high]` instead of the onset-category window; its onset category is the one whose `age.onset_years` window holds the draw (the narrowest on ties, the nearest if none holds it), and that category drives the duration (`age.duration_mean_by_onset`). The age is still onset plus duration under the duration and age caps; a presentation age, when present, still sets the age (raised to the onset).
+- `metadata.onset_age_source` (`literature` or `category`, set only when an onset-ages file is in use) and `metadata.onset_age_years` (the range, for literature cases). The run summary (`onset_ages`: diseases listed, cases that used it) and the dataset card record the file's sha256; `validate` counts those cases (`age.onset_age_cases`) and checks their onset against the range (`onset_age_out_of_range`).
+- `tests/fixtures/v04/golden_0.5.3.jsonl.gz`: cases written by the 0.5.3 code, which the defaults, and an onset-ages file matching nothing, must reproduce.
+
+### Changed
+- `SIMULATOR_VERSION` 0.5.4.
+
 ## [0.5.3] - 2026-10-01
 
 ANALYSIS-006 (`diagnostic.ar-training`): with budget normalization, the budget covered only profile terms and noise came on top, and records were still short (5.74 terms per case against 8.70 real). The default keeps 0.5.2 behaviour.

@@ -18,6 +18,7 @@ __all__ = ["Difficulty", "DifficultyPreset"]
 
 Sex = Literal["female", "male", "other", "unknown"]
 AgeUnit = Literal["days", "months", "years"]
+OnsetAgeSource = Literal["literature", "category"]
 PhenotypeObservationStatus = Literal["positive", "negative", "missing", "unknown", "noise"]
 SexPriorKey = Literal[
     "male_limited",
@@ -136,6 +137,16 @@ class GeneratorMetadata(StrictBaseModel):
         default=None,
         description="Presentation-age range [low, high] the case's age was drawn from "
         "(presentation-ages file); unset when the onset-plus-duration rule set it.",
+    )
+    onset_age_years: tuple[float, float] | None = Field(
+        default=None,
+        description="Onset-age range [low, high] the case's onset was drawn from "
+        "(onset-ages file); unset when the onset category's window set it.",
+    )
+    onset_age_source: OnsetAgeSource | None = Field(
+        default=None,
+        description="Where the onset age came from when an onset-ages file was in use: "
+        "'literature' (a row matched) or 'category'; unset without the file.",
     )
     report_count: int | None = Field(
         default=None,

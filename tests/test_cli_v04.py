@@ -71,7 +71,7 @@ def test_gene_first_v04_run_records_its_artifacts(v04_run) -> None:
     summary = json.loads((directory / "cases.summary.json").read_text("utf-8"))
     cases = read_model_jsonl(cases_path, SyntheticCase)
 
-    assert summary["simulate"]["simulator_version"] == "0.5.3"
+    assert summary["simulate"]["simulator_version"] == "0.5.4"
     assert summary["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert summary["inputs"]["report_model"]["artifact_id"] == "report-model-fixture"
     assert summary["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
@@ -123,7 +123,7 @@ def test_v04_export_and_validate_end_to_end(v04_run, tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     card = json.loads((tmp_path / "a" / "ds.card.json").read_text("utf-8"))
-    assert card["dataset_id"].startswith("ds-sim0.5.3-")
+    assert card["dataset_id"].startswith("ds-sim0.5.4-")
     assert card["inputs"]["report_model"]["sha256"] == sha256_file(V04 / "report_model.json")
     assert card["inputs"]["cardinal"]["sha256"] == sha256_file(V04 / "cardinal.tsv")
     assert card["reporting"]["mode"] == "report_model"
@@ -290,6 +290,40 @@ def test_v051_presentation_ages_and_q_scale_are_recorded(v04_run, tmp_path: Path
     card = json.loads((tmp_path / "ds.card.json").read_text("utf-8"))
     assert card["inputs"]["presentation_ages"]["sha256"] == sha256_file(ages)
     assert card["validate"]["age"]["presentation_age_cases"] == len(listed)
+
+
+def test_v054_onset_ages_are_recorded(v04_run, tmp_path: Path) -> None:
+    _, profiles, _ = v04_run
+    ages = tmp_path / "onset.tsv"
+    ages.write_text(
+        "disease_id\tage_low_years\tage_high_years\tsource\nORPHA:3001\t2\t4\tfixture\n",
+        encoding="utf-8",
+    )
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({"frequency.shrinkage_mean": 0.4}), encoding="utf-8")
+    cases_path = tmp_path / "cases.jsonl"
+
+    result = _invoke(
+        "simulate", "--profiles", str(profiles), "--output", str(cases_path), *GENE_OPTIONS,
+        "--genes", "all", "--cases-per-gene", "40", "--difficulty", "medium",
+        "--calibration", str(calibration), "--onset-ages", str(ages), *NOISE,
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads((tmp_path / "cases.summary.json").read_text("utf-8"))
+    cases = read_model_jsonl(cases_path, SyntheticCase)
+    listed = [c for c in cases if c.target.entity_id == "OMIM:100008"]
+    assert listed and all(c.metadata.onset_age_source == "literature" for c in listed)
+    assert all(c.metadata.onset_age_source == "category" for c in cases if c not in listed)
+    assert summary["onset_ages"] == {"diseases": 1, "cases": len(listed)}
+    assert summary["inputs"]["onset_ages"]["sha256"] == sha256_file(ages)
+    dataset = tmp_path / "ds.jsonl.gz"
+    exported = _invoke("export-training", "--cases", str(cases_path), "--output", str(dataset),
+                       "--allow-dirty")
+    assert exported.exit_code == 0, exported.output
+    card = json.loads((tmp_path / "ds.card.json").read_text("utf-8"))
+    assert card["inputs"]["onset_ages"]["sha256"] == sha256_file(ages)
+    assert card["validate"]["age"]["onset_age_cases"] == len(listed)
 
 
 def test_v052_budget_normalized_run_records_k_and_realized_counts(

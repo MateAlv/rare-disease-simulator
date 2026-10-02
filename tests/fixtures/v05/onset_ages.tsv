@@ -1,0 +1,3 @@
+disease_id	age_low_years	age_high_years	source
+ORPHA:1	2	4	fixture: synthetic range
+OMIM:3	30	45	fixture: synthetic range

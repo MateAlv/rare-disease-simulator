@@ -184,7 +184,7 @@ def test_same_seed_and_config_give_identical_bytes(ontology, tmp_path: Path) -> 
 def test_metadata_carries_versions_and_no_timestamp(ontology) -> None:
     case = _simulate(ontology, source_versions={"profiles_sha256": "abc"})[0]
 
-    assert case.metadata.simulator_version == "0.5.3"
+    assert case.metadata.simulator_version == "0.5.4"
     assert case.metadata.source_versions == {"profiles_sha256": "abc"}
     assert case.metadata.generated_at is None
     assert case.metadata.config_hash.startswith("sha256:")
