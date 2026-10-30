@@ -25,3 +25,7 @@ outputs/*
 !data/cache/.gitkeep
 !data/profiles/.gitkeep
 !outputs/.gitkeep
+
+# Local, not part of this repo
+.claude/
+docs/diagram/
