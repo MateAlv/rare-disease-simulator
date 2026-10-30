@@ -2,11 +2,7 @@
 
 ## Local Evidence Checked
 
-This note is based on the local GraPhens checkout at:
-
-```text
-/home/mate/FIUBA/trabajo-profesional/GenPhenAI/GraPhens
-```
+This note is based on a local checkout of [GraPhens](https://github.com/gianluccacolangelo/GraPhens).
 
 Files checked:
 
